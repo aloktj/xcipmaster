@@ -99,7 +99,7 @@ class Client(object):
         # Open an Ethernet/IP session
         sessionpkt = ENIP_TCP() / ENIP_RegisterSession()
         if self.Sock is not None:
-            self.Sock.send(raw(sessionpkt))
+            self.Sock.send(bytes(sessionpkt))
             reply_pkt = self.recv_enippkt()
             self.session_id = reply_pkt.session
 
@@ -125,7 +125,7 @@ class Client(object):
             ENIP_SendUnitData_Item() / cippkt
         ])
         if self.Sock is not None:
-            self.Sock.send(raw(enippkt))
+            self.Sock.send(bytes(enippkt))
 
     def send_rr_cm_cip(self, cippkt):
         """Encapsulate the CIP packet into a ConnectionManager packet"""
@@ -150,7 +150,7 @@ class Client(object):
         ])
         self.sequence_unit_cip += 1
         if self.Sock is not None:
-            self.Sock.send(raw(enippkt))
+            self.Sock.send(bytes(enippkt))
 
     def recv_enippkt(self):
         """Receive an ENIP packet from the TCP socket"""
@@ -218,7 +218,7 @@ class Client(object):
         self.logger.info(f"TGV2020: send_UDP_ENIP_CIP_IO: sequence_CIP_IO {self.sequence_CIP_IO}")
         if self.Sock1 is not None:
             self.logger.info("TGV2020: send_UDP_ENIP_CIP_IO: Sending UDP_ENIP_CIP_IO through socket")
-            self.Sock1.send(raw(enippkt))
+            self.Sock1.send(bytes(enippkt))
         else:
             self.logger.warning("TGV2020: send_UDP_ENIP_CIP_IO: Socket error: failed to send UDP_ENIP_CIP_IO")
 
@@ -275,7 +275,7 @@ class Client(object):
         if cippkt.status[0].status != 0:
             logger.error("CIP get attribute error: %r", cippkt.status[0])
             return
-        resp_getattrlist = str(cippkt.payload)
+        resp_getattrlist = bytes(cippkt.payload)
         assert resp_getattrlist[:2] == b'\x01\x00'  # Attribute count must be 1
         assert struct.unpack('<H', resp_getattrlist[2:4])[0] == attr  # First attribute
         assert resp_getattrlist[4:6] == b'\x00\x00'  # Status
@@ -309,7 +309,7 @@ class Client(object):
             resppkt = self.recv_enippkt()
 
             # Decode a list of 32-bit integers
-            data = str(resppkt[CIP].payload)
+            data = bytes(resppkt[CIP].payload)
             for i in range(0, len(data), 4):
                 inst_list.append(struct.unpack('<I', data[i:i + 4])[0])
             
@@ -338,7 +338,7 @@ class Client(object):
             resppkt = self.recv_enippkt()
             
             cipstatus = resppkt[CIP].status[0].status
-            received_data = str(resppkt[CIP].payload)
+            received_data = bytes(resppkt[CIP].payload)
             if cipstatus == 0:
                 # Success
                 assert len(received_data) == remaining_size
