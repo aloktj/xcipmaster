@@ -359,6 +359,7 @@ class Client(object):
     @staticmethod
     def attr_format(attrval):
         """Format an attribute value to be displayed to a human"""
+        attr_bytes = bytearray(attrval)
         if len(attrval) == 1:
             # 1-byte integer
             return hex(struct.unpack('B', attrval)[0])
@@ -368,11 +369,11 @@ class Client(object):
         elif len(attrval) == 4:
             # 4-byte integer
             return hex(struct.unpack('<I', attrval)[0])
-        elif all(x == b'\0' for x in attrval):
+        elif all(b == 0 for b in attr_bytes):
             # a series of zeros
             return '[{} zeros]'.format(len(attrval))
         # format in hexadecimal the content of attrval
-        return ''.join('{:2x}'.format(ord(x)) for x in attrval)
+        return ' '.join('{:02x}'.format(b) for b in attr_bytes)
 
 
 
