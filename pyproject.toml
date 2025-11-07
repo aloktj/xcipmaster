@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "xcipmaster"
+version = "0.1.0"
+description = "Command-line CIP master utility for validating configurations and network connectivity."
+readme = "README.md"
+authors = [
+  { name = "XCIP Master Maintainers" }
+]
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = [
+  "click>=8.1,<9",
+  "ping3>=5.1,<6",
+  "pyfiglet>=1.0,<2",
+  "scapy>=2.6,<3",
+  "tabulate>=0.9,<0.10",
+  "termcolor>=2.4,<4",
+]
+
+[project.optional-dependencies]
+packaging = ["pyinstaller>=6.16,<7"]
+
+[project.scripts]
+xcipmaster = "xcipmaster.cli.commands:cli"
+
+[tool.hatch.build]
+include = ["xcipmaster", "thirdparty", "main.py", "tests", "Requirements.txt", "README.md", "LICENSE"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["xcipmaster"]
+include = ["thirdparty"]

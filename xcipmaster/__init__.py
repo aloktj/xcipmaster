@@ -1,10 +1,12 @@
 """XCIP Master service package."""
 
-from .config import CIPConfigService, CIPConfigResult
-from .network import NetworkTestService, NetworkTestResult
+from .__about__ import __version__
 from .comm import CommunicationManager
+from .config import CIPConfigResult, CIPConfigService
+from .network import NetworkTestResult, NetworkTestService
 
 __all__ = [
+    "__version__",
     "CIPConfigService",
     "CIPConfigResult",
     "NetworkTestService",
