@@ -23,3 +23,20 @@ Virtualenv Installation using pip:
 6. pip install -r requirements.txt # Install the project dependencies from the requirements.txt file into Virtualenv
 7. python main.py # Your environment is now set up. You can start running the tool
 8. deactivate # You can exit the Virtualenv using deactivate command
+
+## Testing helpers
+
+Unit tests can instantiate the command controller directly with stubbed
+dependencies. The :class:`CLI` constructor accepts optional services and a
+``test_mode`` flag that skips the interactive banner, progress bar, and startup
+prompts. For example::
+
+    fake_cli = CLI(
+        config_service=FakeConfigService(),
+        network_service=FakeNetworkService(),
+        comm_manager=FakeCommManager(),
+        test_mode=True,
+    )
+
+The object can then be passed to Click's ``CliRunner`` via ``obj=fake_cli`` to
+exercise commands without touching the real filesystem or network.

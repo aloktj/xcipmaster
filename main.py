@@ -18,6 +18,7 @@ import binascii
 import operator
 import struct
 from pathlib import Path
+from typing import Callable, Optional
 # from thirdparty.scapy_cip_enip.plc import PLCClient as client
 from xcipmaster.config import CIPConfigService
 from xcipmaster.network import NetworkTestService
@@ -39,17 +40,28 @@ ENABLE_NETWORK = True
 DEBUG_CIP_FRAMES=bool(False)
 
 class CLI:
-    def __init__(self):
+    def __init__(
+        self,
+        config_service: Optional[CIPConfigService] = None,
+        network_service: Optional[NetworkTestService] = None,
+        comm_manager: Optional[CommunicationManager] = None,
+        *,
+        test_mode: bool = False,
+    ):
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.config_service = CIPConfigService(logger=self.logger)
-        self.network_service = NetworkTestService(logger=self.logger)
-        self.comm_manager = CommunicationManager(
-            self.config_service, self.network_service, logger=self.logger
-        )
+        self.config_service = config_service or CIPConfigService(logger=self.logger)
+        self.network_service = network_service or NetworkTestService(logger=self.logger)
+        if comm_manager is None:
+            self.comm_manager = CommunicationManager(
+                self.config_service, self.network_service, logger=self.logger
+            )
+        else:
+            self.comm_manager = comm_manager
         self.thread_dict = {}  # Dictionary to store wave threads
         self.cip_test_flag = True
         self.logger.info("Initializing LoggedClass")
         self.time_zone = self.get_system_timezone()
+        self.test_mode = test_mode
 
     @property
     def ot_packet(self):
@@ -963,23 +975,35 @@ class CLI:
                     click.echo(line.strip())
     
 
-def _initialize_controller(ctx: click.Context) -> CLI:
-    controller = CLI()
-    controller.display_banner()
-    controller.progress_bar("Initializing", 1)
+def _initialize_controller(
+    ctx: click.Context, factory: Callable[[], CLI] = CLI
+) -> CLI:
+    """Create and prepare the :class:`CLI` controller for interactive sessions.
 
-    if controller.cip_test_flag and not ctx.resilient_parsing:
-        if not click.confirm('Do you want to continue?', default=True):
-            click.echo('Exiting...')
-            ctx.exit()
+    Tests can supply a custom ``factory`` (for example ``lambda: CLI(test_mode=True)``)
+    to inject stub services and bypass the interactive startup behaviour.
+    """
 
-    default_config_path = str(Path("./conf"))
-    if not controller.cip_config(default_config_path):
-        raise click.ClickException("CIP configuration failed during initialization.")
+    controller = factory()
 
-    if ENABLE_NETWORK:
-        if not controller.config_network("10.0.1.1", "239.192.1.3"):
-            raise click.ClickException("Network configuration failed during initialization.")
+    if not controller.test_mode:
+        controller.display_banner()
+        controller.progress_bar("Initializing", 1)
+
+        if controller.cip_test_flag and not ctx.resilient_parsing:
+            if not click.confirm('Do you want to continue?', default=True):
+                click.echo('Exiting...')
+                ctx.exit()
+
+        default_config_path = str(Path("./conf"))
+        if not controller.cip_config(default_config_path):
+            raise click.ClickException("CIP configuration failed during initialization.")
+
+        if ENABLE_NETWORK:
+            if not controller.config_network("10.0.1.1", "239.192.1.3"):
+                raise click.ClickException(
+                    "Network configuration failed during initialization."
+                )
 
     return controller
 
@@ -1039,7 +1063,7 @@ class CIPShell(cmd_module.Cmd):
 def cli(ctx):
     """CIP Tool command-line interface."""
     if ctx.obj is None and not ctx.resilient_parsing:
-        ctx.obj = _initialize_controller(ctx)
+        ctx.obj = _initialize_controller(ctx, CLI)
 
 
 @cli.command()
