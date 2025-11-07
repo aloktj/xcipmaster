@@ -182,7 +182,7 @@ class CLI(UIUtilities):
             click.echo(f" {idx}. {path.name}")
 
         click.echo("")
-        return [str(path) for path in xml_files]
+        return list(xml_files)
 
     def _resolve_cip_config_path(self, config_path: str):
         if hasattr(self.config_service, "resolve_cip_config_path"):
@@ -355,7 +355,7 @@ class CLI(UIUtilities):
         click.echo("\nAvailable commands:")
         
         commands = [
-            ("start --config <path> --target-ip <ip> --multicast-ip <ip>", "Validate configuration, test networking, and start communication"),
+            ("start", "Validate configuration, test networking, and start communication"),
             ("stop", "Stop Communication"),
             ("auto", "Switch to automatic communication"),
             ("man", "Switch to manual communication (usage: start,stop Commands)"),
@@ -369,7 +369,7 @@ class CLI(UIUtilities):
             ("tria <name> <max_val> <min_val> <period(ms)>", "Wave a field value with a triangular waveform"),
             ("box <name> <max_val> <min_val> <period(ms)> <duty_cycle>", "Wave a field value with a square/rectangular waveform"),
             ("live <refresh_rate(ms)>", "Display real-time field data of the specified packet class"),
-            ("cip-config --config <path>", "Run CIP configuration tests"),
+            ("cip-config", "Select and validate a CIP configuration file"),
             ("test-net --target-ip <ip> --multicast-ip <ip>", "Run network configuration tests"),
             ("set-net [--target-ip <ip>] [--multicast-ip <ip>]", "Update stored network addresses and rerun tests"),
             ("log", "Print the recent 100 log events"),

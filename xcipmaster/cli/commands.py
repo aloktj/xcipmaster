@@ -127,44 +127,43 @@ def cli(ctx):
 
 
 @cli.command()
-@click.option(
-    "--config",
-    "config_path",
-    type=click.Path(path_type=Path, dir_okay=True, file_okay=True),
-    default=default_config_directory(),
-    show_default=True,
-    help="Path to a CIP configuration file or directory containing one.",
-)
-@click.option(
-    "--target-ip",
-    default=None,
-    help="Target device IP address. Defaults to the current setting.",
-)
-@click.option(
-    "--multicast-ip",
-    default=None,
-    help="Multicast group IP address. Defaults to the current setting.",
-)
 @pass_controller
-def start(controller: CLI, config_path: Path, target_ip: str, multicast_ip: str):
+def start(controller: CLI):
     """Validate configuration, test networking, and start communication."""
 
     if controller.enable_auto_reconnect:
         click.echo("Disabled auto-Connect using the CMD: <man> and try again !!!")
         return
 
-    if not controller.ensure_configuration(str(config_path)):
+    if not controller.ensure_configuration():
         raise click.ClickException("CIP configuration failed.")
 
-    selected_target_ip = target_ip or controller.target_ip
-    selected_multicast_ip = multicast_ip or controller.multicast_ip
+    if ENABLE_NETWORK:
+        current_ip = getattr(controller.network_service, "ip_address", None)
+        current_multicast = getattr(
+            controller.network_service, "user_multicast_address", None
+        )
 
-    force_network = bool(target_ip or multicast_ip)
+        if current_ip is None or current_multicast is None:
+            if controller.test_mode:
+                target_ip = controller.target_ip
+                multicast_ip = controller.multicast_ip
+            else:
+                target_ip = click.prompt(
+                    "Target IP address", default=controller.target_ip, show_default=True
+                )
+                multicast_ip = click.prompt(
+                    "Multicast group address",
+                    default=controller.multicast_ip,
+                    show_default=True,
+                )
 
-    if not controller.ensure_network_configuration(
-        selected_target_ip, selected_multicast_ip, force=force_network
-    ):
-        raise click.ClickException("Network configuration failed.")
+            if not controller.ensure_network_configuration(
+                target_ip, multicast_ip, force=True
+            ):
+                raise click.ClickException("Network configuration failed.")
+        elif not controller.ensure_network_configuration():
+            raise click.ClickException("Network configuration failed.")
 
     click.echo("Attempting to Start communication...")
     controller.comm_manager.start()
@@ -350,18 +349,47 @@ def stop_wave_command(controller: CLI, field_name: str):
 
 
 @cli.command("cip-config")
-@click.option(
-    "--config",
-    "config_path",
-    type=click.Path(path_type=Path, dir_okay=True, file_okay=True),
-    default=default_config_directory(),
-    show_default=True,
-    help="Path to a CIP configuration file or directory containing one.",
-)
 @pass_controller
-def cip_config_command(controller: CLI, config_path: Path):
+def cip_config_command(controller: CLI):
     """Run CIP configuration tests."""
-    if not controller.cip_config(str(config_path), force=True):
+
+    base_path = Path(controller.default_config_path or default_config_directory())
+    config_dir = base_path if base_path.is_dir() else base_path.parent
+
+    if not config_dir.exists():
+        raise click.ClickException(
+            f"Configuration directory not found: {config_dir}")
+
+    xml_files = controller.list_files_in_config_folder(str(config_dir))
+    if not xml_files:
+        raise click.ClickException("No CIP configuration files found.")
+
+    default_selection = None
+    current_config = getattr(controller.config_service, "cip_xml_path", None)
+
+    def _index_for(path_obj: Path):
+        try:
+            return xml_files.index(path_obj) + 1
+        except ValueError:
+            return None
+
+    if current_config is not None:
+        default_selection = _index_for(Path(current_config))
+    if default_selection is None and controller.default_config_path:
+        default_selection = _index_for(Path(controller.default_config_path))
+    if default_selection is None:
+        default_selection = 1
+
+    selection = click.prompt(
+        "Select configuration file",
+        type=click.IntRange(1, len(xml_files)),
+        default=default_selection,
+        show_default=True,
+    )
+
+    selected_path = xml_files[selection - 1]
+
+    if not controller.cip_config(str(selected_path), force=True):
         raise click.ClickException("CIP configuration failed.")
 
 
