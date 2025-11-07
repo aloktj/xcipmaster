@@ -26,6 +26,34 @@ class _DummyFloatField(_DummyField):
     pass
 
 
+class _DummyBitField(_DummyField):
+    pass
+
+
+class _DummyByteField(_DummyField):
+    pass
+
+
+class _DummyShortField(_DummyField):
+    pass
+
+
+class _DummyLEShortField(_DummyField):
+    pass
+
+
+class _DummyIntField(_DummyField):
+    pass
+
+
+class _DummyLongField(_DummyField):
+    pass
+
+
+class _DummyDoubleField(_DummyField):
+    pass
+
+
 class _DummyStrField(_DummyField):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -43,15 +71,18 @@ class _DummyStrField(_DummyField):
 
 scapy_all_stub = types.SimpleNamespace(
     Packet=_DummyPacket,
-    ByteField=_DummyField,
-    BitField=_DummyField,
     IEEEFloatField=_DummyFloatField,
+    BitField=_DummyBitField,
+    ByteField=_DummyByteField,
+    SignedByteField=_DummyByteField,
+    ShortField=_DummyShortField,
+    LEShortField=_DummyLEShortField,
+    IntField=_DummyIntField,
+    LEIntField=_DummyIntField,
+    LongField=_DummyLongField,
+    IEEEDoubleField=_DummyDoubleField,
     StrFixedLenField=_DummyStrField,
-    LEIntField=_DummyField,
-    ShortField=_DummyField,
-    SignedByteField=_DummyField,
-    LEShortField=_DummyField,
-    IEEEDoubleField=_DummyField,
+    StrField=_DummyStrField,
 )
 
 
