@@ -58,7 +58,8 @@ class CLI:
         self.last_cip_file_name = None
         self.stop_event = None
         self.stop_events = {}
-        self.stop_comm_events = None
+        self.stop_comm_events = threading.Event()
+        self.start_comm_thread_instance = None
         self.thread_dict = {}  # Dictionary to store wave threads
         self.cip_test_flag = True
         self.logger.info("Initializing LoggedClass")
@@ -1286,7 +1287,7 @@ class CLI:
             self.logger.warning("start_comm: to_connection_param is None")
             return
         
-        def start_comm_thread():            
+        def start_comm_thread():
             while self.enable_auto_reconnect or not self.stop_comm_events.is_set():
                 try:
                     self.logger.info("Executing start_comm_thread function")
@@ -1346,9 +1347,19 @@ class CLI:
             self.logger.info("start_comm_thread: Thread has finished execution")
         
                 
-        self.stop_comm_events = threading.Event()
-        start_comm_thread_instance = threading.Thread(target=start_comm_thread)
-        start_comm_thread_instance.start()
+        if self.start_comm_thread_instance is not None:
+            if self.start_comm_thread_instance.is_alive():
+                self.logger.info("Waiting for previous communication thread to exit before starting a new one")
+                self.stop_comm_events.set()
+                self.start_comm_thread_instance.join(timeout=5)
+                if self.start_comm_thread_instance.is_alive():
+                    self.logger.warning("Previous communication thread did not stop before starting a new one")
+                    return
+                self.logger.info("Previous communication thread exited")
+
+        self.stop_comm_events.clear()
+        self.start_comm_thread_instance = threading.Thread(target=start_comm_thread)
+        self.start_comm_thread_instance.start()
         
     def enable_auto_com(self):
         self.logger.info(f"{self.enable_auto_com.__name__}: Automatic Communication enabled")
@@ -1362,7 +1373,10 @@ class CLI:
         
     def stop_comm(self):
         self.logger.info(f"{self.stop_comm.__name__}: Stopping comm thread")
-        self.stop_comm_events.set() # Set the event to stop the thread
+        if self.stop_comm_events is not None:
+            self.stop_comm_events.set() # Set the event to stop the thread
+        else:
+            self.logger.warning(f"{self.stop_comm.__name__}: Stop event is not initialized; nothing to signal")
         
         try:
             if hasattr(self, 'clMPU_CIP_Server') and self.clMPU_CIP_Server is not None:
@@ -1381,25 +1395,35 @@ class CLI:
                     self.logger.error(f"{self.stop_comm.__name__}: Error closing server connection: {str(e)}")
                     click.echo(f"Error closing server connection: {str(e)}")
     
-            if hasattr(self, 'start_comm_thread_instance') and self.start_comm_thread_instance.is_alive():
+            if (
+                hasattr(self, 'start_comm_thread_instance')
+                and self.start_comm_thread_instance is not None
+                and self.start_comm_thread_instance.is_alive()
+            ):
                 self.start_comm_thread_instance.join(timeout=5) # Wait up to 5 seconds for the thread to finish
-                
+
                 if self.start_comm_thread_instance.is_alive():
                     self.logger.warning(f"{self.stop_comm.__name__}: Thread did not stop within the timeout period")
                     click.echo("Warning: Communication thread did not stop within the expected time")
                 else:
                     self.logger.info(f"{self.stop_comm.__name__}: Thread stopped successfully")
-        
+                    self.start_comm_thread_instance = None
+
             self.logger.info(f"{self.stop_comm.__name__}: Comm Thread has been successfully stopped")
-            
+
         except Exception as e:
             self.logger.error(f"{self.stop_comm.__name__}: Unexpected error while stopping communication: {str(e)}")
             click.echo(f"Unexpected error while stopping communication: {str(e)}")
         finally:
-            if hasattr(self, 'start_comm_thread_instance') and self.start_comm_thread_instance.is_alive():
+            if (
+                hasattr(self, 'start_comm_thread_instance')
+                and self.start_comm_thread_instance is not None
+                and self.start_comm_thread_instance.is_alive()
+            ):
                 click.echo("Warning: Communication thread is still running")
             else:
                 click.echo("Communication thread has been successfully stopped")
+                self.start_comm_thread_instance = None
     
     def handle_input(self):
         self.logger.info("Executing handle_input function")
