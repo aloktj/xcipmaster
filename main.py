@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Callable, Optional
 # from thirdparty.scapy_cip_enip.plc import PLCClient as client
 from xcipmaster.config import CIPConfigService
-from xcipmaster.network import NetworkTestService
+from xcipmaster.network import NetworkCommandRunner, NetworkTestService
 from xcipmaster.comm import CommunicationManager
 
 
@@ -65,7 +65,9 @@ class CLI:
         self.config_service = config_service
 
         if network_service is None:
-            network_service = NetworkTestService(logger=self.logger)
+            network_service = NetworkTestService(
+                logger=self.logger, runner=NetworkCommandRunner()
+            )
         self.network_service = network_service
 
         if comm_manager is None:
