@@ -1058,7 +1058,12 @@ class CLI:
     ########################################################################
     # Under Test
     ########################################################################
-    
+
+    def _float_to_big_endian_float(self, value):
+        byte_array = struct.pack('f', float(value))
+        reversed_byte_array = byte_array[::-1]
+        return struct.unpack('f', reversed_byte_array)[0]
+
     def wave_field(self, field_name, max_value, min_value, period_ms):
         self.logger.info("Executing wave_field function")
         self.stop_wave(field_name)
@@ -1077,12 +1082,11 @@ class CLI:
                     current_time = time.time()
                     elapsed_time = current_time - start_time
                     wave_value = amplitude * math.sin(2 * math.pi * elapsed_time / period_ms) + offset
-                    
-                    byte_array = struct.pack('f', float(wave_value))
-                    reversed_byte_array = byte_array[::-1]
-                    bE_field_value = struct.unpack('f', reversed_byte_array)[0] #Big endian field value
-                    setattr(self.OT_packet, field_name, bE_field_value)
-                    
+
+                    bE_field_value = self._float_to_big_endian_float(wave_value)
+                    with self.lock:
+                        setattr(self.OT_packet, field_name, bE_field_value)
+
                     # print(f"Set {field_name} to {wave_value}")
                     time.sleep(0.01)  # Adjust sleep time as needed
 
@@ -1112,10 +1116,9 @@ class CLI:
                     elapsed_time = current_time - start_time
                     phase = elapsed_time / period_ms
                     wave_value = (amplitude * (2 * abs(phase - math.floor(phase + 0.5)) - 1)) + offset
-                    byte_array = struct.pack('f', float(wave_value))
-                    reversed_byte_array = byte_array[::-1]
-                    bE_field_value = struct.unpack('f', reversed_byte_array)[0] #Big endian field value
-                    setattr(self.OT_packet, field_name, bE_field_value)
+                    bE_field_value = self._float_to_big_endian_float(wave_value)
+                    with self.lock:
+                        setattr(self.OT_packet, field_name, bE_field_value)
                     # print(f"Set {field_name} to {wave_value}")
                     time.sleep(0.01)  # Adjust sleep time as needed
 
@@ -1147,10 +1150,9 @@ class CLI:
                     elapsed_time = current_time - start_time
                     duty_period = period_ms * duty_cycle
                     wave_value = max_value if (elapsed_time % period_ms) < duty_period else min_value
-                    byte_array = struct.pack('f', float(wave_value))
-                    reversed_byte_array = byte_array[::-1]
-                    bE_field_value = struct.unpack('f', reversed_byte_array)[0] #Big endian field value
-                    setattr(self.OT_packet, field_name, bE_field_value)
+                    bE_field_value = self._float_to_big_endian_float(wave_value)
+                    with self.lock:
+                        setattr(self.OT_packet, field_name, bE_field_value)
                     # print(f"Set {field_name} to {wave_value}")
                     time.sleep(0.01)  # Adjust sleep time as needed
 
