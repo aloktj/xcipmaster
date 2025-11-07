@@ -5,13 +5,42 @@ import calendar
 import logging
 import threading
 import time
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from thirdparty.scapy_cip_enip.tgv2020 import Client
 from scapy import all as scapy_all
 
 from .config import CIPConfigService
 from .network import NetworkTestService
+
+
+ClientFactory = Callable[..., Any]
+ThreadFactory = Callable[..., threading.Thread]
+
+
+def default_client_factory(
+    *,
+    ip_address: str,
+    multicast_address: str,
+    ot_param: int,
+    to_param: int,
+) -> Client:
+    """Create a production CIP client instance.
+
+    The factory centralises the creation logic so tests can supply a synchronous
+    fake without importing the heavy Scapy based implementation.
+    """
+
+    client = Client(IPAddr=ip_address, MulticastGroupIPaddr=multicast_address)
+    client.ot_connection_param = ot_param
+    client.to_connection_param = to_param
+    return client
+
+
+def default_thread_factory(*, target: Callable[[], None], name: Optional[str] = None) -> threading.Thread:
+    """Create the background thread used in production."""
+
+    return threading.Thread(target=target, name=name, daemon=True)
 
 
 class CommunicationManager:
@@ -22,6 +51,9 @@ class CommunicationManager:
         config_service: CIPConfigService,
         network_service: NetworkTestService,
         logger: Optional[logging.Logger] = None,
+        *,
+        client_factory: Optional[ClientFactory] = None,
+        thread_factory: Optional[ThreadFactory] = None,
     ):
         self.logger = logger or logging.getLogger(self.__class__.__name__)
         self.config_service = config_service
@@ -32,6 +64,8 @@ class CommunicationManager:
         self.enable_auto_reconnect = False
         self.clMPU_CIP_Server = None
         self.bCIPErrorOccured = False
+        self.client_factory: ClientFactory = client_factory or default_client_factory
+        self.thread_factory: ThreadFactory = thread_factory or default_thread_factory
 
     def calculate_connection_params(self):
         ot_size = None
@@ -140,65 +174,113 @@ class CommunicationManager:
             while self.enable_auto_reconnect or not self.stop_comm_events.is_set():
                 try:
                     self.logger.info("Executing start communication thread")
-                    self.clMPU_CIP_Server = Client(
-                        IPAddr=self.network_service.ip_address,
-                        MulticastGroupIPaddr=self.network_service.user_multicast_address,
-                    )
-                    self.clMPU_CIP_Server.ot_connection_param = ot_param
-                    self.clMPU_CIP_Server.to_connection_param = to_param
-
-                    if self.clMPU_CIP_Server.connected:
-                        self.logger.info(
-                            "start: Established session %s",
-                            self.clMPU_CIP_Server.connected,
-                        )
-
-                        bForwoardOpenRspIsOK = self.clMPU_CIP_Server.forward_open()
-                        if bForwoardOpenRspIsOK:
-                            self.logger.info("start: Forward Open OK")
-                        else:
-                            self.logger.warning("start: Forward Open request failed")
-                            raise ConnectionError("Forward Open request failed")
-
-                        self.bCIPErrorOccured = self.manage_io_communication(self.clMPU_CIP_Server)
-
-                        if not self.bCIPErrorOccured:
-                            self.clMPU_CIP_Server.forward_close()
-
-                        self.clMPU_CIP_Server.close()
-
-                        if not self.enable_auto_reconnect:
-                            self.logger.info("start: Auto reconnect disabled, exiting thread")
-                            break
-                    else:
-                        self.logger.warning("start: Unable to establish session")
-                        raise ConnectionError("Failed to establish session")
-
+                    self.run_once(ot_param=ot_param, to_param=to_param)
                 except (ConnectionError, Exception) as exc:
                     self.logger.error("Connection error: %s", exc)
-                    if self.enable_auto_reconnect:
+                    if self.enable_auto_reconnect and not self.stop_comm_events.is_set():
                         self.logger.info("Auto-reconnect is enabled. Retrying in 2 seconds...")
                         time.sleep(2)
-                    else:
-                        self.logger.info("Auto-reconnect is disabled. Exiting communication thread.")
-                        break
+                        continue
+                    self.logger.info("Auto-reconnect is disabled. Exiting communication thread.")
+                    break
 
                 if self.stop_comm_events.is_set():
                     break
 
-                if self.enable_auto_reconnect:
-                    time.sleep(2)
-                else:
+                if not self.enable_auto_reconnect:
+                    self.logger.info("start: Auto reconnect disabled, exiting thread")
+                    break
+
+                self.logger.info("Auto-reconnect is enabled. Retrying in 2 seconds...")
+                time.sleep(2)
+
+                if self.stop_comm_events.is_set():
                     break
 
             self.logger.info("start: Thread has finished execution")
 
         self.stop_comm_events.clear()
-        self.start_comm_thread_instance = threading.Thread(
-            target=start_comm_thread,
-            daemon=True,
-        )
+        try:
+            thread = self.thread_factory(
+                target=start_comm_thread,
+                name="CIPCommunicationThread",
+            )
+        except TypeError:
+            thread = self.thread_factory(start_comm_thread)
+        self.start_comm_thread_instance = thread
         self.start_comm_thread_instance.start()
+
+    def run_once(
+        self,
+        *,
+        ot_param: Optional[int] = None,
+        to_param: Optional[int] = None,
+    ) -> bool:
+        """Run a single communication cycle synchronously.
+
+        The helper enables unit tests to exercise the handshake and IO logic
+        without spawning background threads.
+        """
+
+        if ot_param is None or to_param is None:
+            ot_param, to_param = self.calculate_connection_params()
+            if ot_param is None or to_param is None:
+                self.logger.warning("Connection parameters are not defined")
+                return False
+
+        client = self._create_client(ot_param, to_param)
+        self.clMPU_CIP_Server = client
+        handshake_success = False
+        self.bCIPErrorOccured = False
+
+        try:
+            if not getattr(client, "connected", False):
+                self.logger.warning("start: Unable to establish session")
+                raise ConnectionError("Failed to establish session")
+
+            self.logger.info("start: Established session %s", client.connected)
+
+            bForwoardOpenRspIsOK = client.forward_open()
+            if bForwoardOpenRspIsOK:
+                self.logger.info("start: Forward Open OK")
+            else:
+                self.logger.warning("start: Forward Open request failed")
+                raise ConnectionError("Forward Open request failed")
+
+            handshake_success = True
+            self.bCIPErrorOccured = self.manage_io_communication(client)
+
+            if not self.bCIPErrorOccured and hasattr(client, "forward_close"):
+                client.forward_close()
+
+            return handshake_success
+        finally:
+            if hasattr(client, "close"):
+                client.close()
+            self.clMPU_CIP_Server = None
+
+    def _create_client(self, ot_param: int, to_param: int):
+        try:
+            client = self.client_factory(
+                ip_address=self.network_service.ip_address,
+                multicast_address=self.network_service.user_multicast_address,
+                ot_param=ot_param,
+                to_param=to_param,
+            )
+        except TypeError:
+            client = self.client_factory(
+                self.network_service.ip_address,
+                self.network_service.user_multicast_address,
+                ot_param,
+                to_param,
+            )
+
+        if hasattr(client, "ot_connection_param"):
+            client.ot_connection_param = ot_param
+        if hasattr(client, "to_connection_param"):
+            client.to_connection_param = to_param
+
+        return client
 
     def _set_heartbeat(self, field_name: str, field_value: int) -> None:
         packet = self.config_service.OT_packet
@@ -261,4 +343,8 @@ class CommunicationManager:
                 self.start_comm_thread_instance = None
 
 
-__all__ = ["CommunicationManager"]
+__all__ = [
+    "CommunicationManager",
+    "default_client_factory",
+    "default_thread_factory",
+]

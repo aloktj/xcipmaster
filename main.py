@@ -22,7 +22,11 @@ from typing import Callable, Optional
 # from thirdparty.scapy_cip_enip.plc import PLCClient as client
 from xcipmaster.config import CIPConfigService
 from xcipmaster.network import NetworkCommandRunner, NetworkTestService
-from xcipmaster.comm import CommunicationManager
+from xcipmaster.comm import (
+    CommunicationManager,
+    default_client_factory,
+    default_thread_factory,
+)
 
 
 # Create log directory if it doesn't exist
@@ -55,7 +59,10 @@ class CLI:
         for example ``CLI(config_service=my_fake, test_mode=True)``, to avoid
         touching the real filesystem or network.  ``test_mode`` additionally
         suppresses the interactive prompts triggered by
-        :func:`_initialize_controller`.
+        :func:`_initialize_controller`.  Communication tests can run the
+        handshake and IO logic synchronously via
+        :meth:`CommunicationManager.run_once` while injecting synchronous
+        factories.
         """
 
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -72,7 +79,11 @@ class CLI:
 
         if comm_manager is None:
             comm_manager = CommunicationManager(
-                self.config_service, self.network_service, logger=self.logger
+                self.config_service,
+                self.network_service,
+                logger=self.logger,
+                client_factory=default_client_factory,
+                thread_factory=default_thread_factory,
             )
         self.comm_manager = comm_manager
         self.thread_dict = {}  # Dictionary to store wave threads
