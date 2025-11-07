@@ -1267,11 +1267,20 @@ class CLI:
     def start_comm(self):
         self.logger.info("Executing CIP Communication Start function")
 
+        if (
+            self.start_comm_thread_instance is not None
+            and self.start_comm_thread_instance.is_alive()
+        ):
+            self.logger.info(
+                "start_comm: Communication thread already running; start request ignored"
+            )
+            return
+
         if self.enable_auto_reconnect:
             self.logger.warning("Auto-Reconnect Detected")
         else:
             self.logger.warning("Manual Connect Detected")
-            
+
         ot_param,to_param = self.calculate_connection_params()
         self.logger.info(f"ot_param:{hex(ot_param)}")
         self.logger.info(f"to_param:{hex(to_param)}")
@@ -1347,18 +1356,11 @@ class CLI:
             self.logger.info("start_comm_thread: Thread has finished execution")
         
                 
-        if self.start_comm_thread_instance is not None:
-            if self.start_comm_thread_instance.is_alive():
-                self.logger.info("Waiting for previous communication thread to exit before starting a new one")
-                self.stop_comm_events.set()
-                self.start_comm_thread_instance.join(timeout=5)
-                if self.start_comm_thread_instance.is_alive():
-                    self.logger.warning("Previous communication thread did not stop before starting a new one")
-                    return
-                self.logger.info("Previous communication thread exited")
-
         self.stop_comm_events.clear()
-        self.start_comm_thread_instance = threading.Thread(target=start_comm_thread)
+        self.start_comm_thread_instance = threading.Thread(
+            target=start_comm_thread,
+            daemon=True,
+        )
         self.start_comm_thread_instance.start()
         
     def enable_auto_com(self):
