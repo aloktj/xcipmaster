@@ -92,6 +92,8 @@ class _StubCommunicationManager:
 
 
 comm_stub.CommunicationManager = _StubCommunicationManager
+comm_stub.default_client_factory = lambda **kwargs: None
+comm_stub.default_thread_factory = lambda **kwargs: None
 sys.modules.setdefault("xcipmaster.comm", comm_stub)
 
 import main
