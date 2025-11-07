@@ -74,7 +74,7 @@ class CIPShell(cmd_module.Cmd):
 
     def __init__(self, ctx: click.Context):
         super().__init__()
-        self.ctx = ctx
+        self.group_ctx = ctx.parent or ctx
 
     def do_exit(self, arg):  # pragma: no cover - interactive helper
         """Exit the interactive shell."""
@@ -85,15 +85,20 @@ class CIPShell(cmd_module.Cmd):
     def do_help(self, arg):  # pragma: no cover - interactive helper
         args = shlex.split(arg)
         if not args:
-            self.ctx.invoke(help_command)
+            self.group_ctx.invoke(help_command)
             return
 
-        command = self.ctx.command.get_command(self.ctx, args[0])
+        command_source = getattr(self.group_ctx, "command", None)
+        if command_source is None or not hasattr(command_source, "get_command"):
+            click.echo("Interactive shell is not attached to a command group.")
+            return
+
+        command = command_source.get_command(self.group_ctx, args[0])
         if command is None:
             click.echo(f"Unknown command: {args[0]}")
             return
 
-        with command.make_context(command.name, args[1:], parent=self.ctx) as cmd_ctx:
+        with command.make_context(command.name, args[1:], parent=self.group_ctx) as cmd_ctx:
             click.echo(command.get_help(cmd_ctx))
 
     def default(self, line):  # pragma: no cover - interactive helper
@@ -101,13 +106,18 @@ class CIPShell(cmd_module.Cmd):
         if not args:
             return
 
-        command = self.ctx.command.get_command(self.ctx, args[0])
+        command_source = getattr(self.group_ctx, "command", None)
+        if command_source is None or not hasattr(command_source, "get_command"):
+            click.echo("Interactive shell is not attached to a command group.")
+            return
+
+        command = command_source.get_command(self.group_ctx, args[0])
         if command is None:
             click.echo(f"Unknown command: {args[0]}")
             return
 
         try:
-            with command.make_context(command.name, args[1:], parent=self.ctx) as cmd_ctx:
+            with command.make_context(command.name, args[1:], parent=self.group_ctx) as cmd_ctx:
                 command.invoke(cmd_ctx)
         except click.ClickException as exc:
             exc.show()
