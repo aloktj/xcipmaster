@@ -16,9 +16,10 @@ if str(BASE_DIR) not in sys.path:
 
 from xcipmaster.cli.controller import CLI  # noqa: E402
 from xcipmaster.config import CIPConfigService  # noqa: E402
+from xcipmaster.paths import default_config_file  # noqa: E402
 
 
-CONFIG_PATH = Path(__file__).resolve().parent.parent / "conf" / "cip_xml_config.xml"
+CONFIG_PATH = default_config_file()
 
 
 class _StubCommManager:

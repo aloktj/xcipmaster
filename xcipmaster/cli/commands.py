@@ -10,6 +10,7 @@ import time
 import click
 
 from .controller import CLI
+from xcipmaster.paths import default_config_directory
 
 
 ENABLE_NETWORK = True
@@ -35,7 +36,7 @@ def _initialize_controller(
                 click.echo("Exiting...")
                 ctx.exit()
 
-        default_config_path = str(Path("./conf"))
+        default_config_path = str(default_config_directory())
         if not controller.cip_config(default_config_path):
             raise click.ClickException("CIP configuration failed during initialization.")
 
@@ -125,7 +126,7 @@ def cli(ctx):
     "--config",
     "config_path",
     type=click.Path(path_type=Path, dir_okay=True, file_okay=True),
-    default=Path("./conf"),
+    default=default_config_directory(),
     show_default=True,
     help="Path to a CIP configuration file or directory containing one.",
 )
@@ -318,7 +319,7 @@ def stop_wave_command(controller: CLI, field_name: str):
     "--config",
     "config_path",
     type=click.Path(path_type=Path, dir_okay=True, file_okay=True),
-    default=Path("./conf"),
+    default=default_config_directory(),
     show_default=True,
     help="Path to a CIP configuration file or directory containing one.",
 )

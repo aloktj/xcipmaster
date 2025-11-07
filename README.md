@@ -1,28 +1,34 @@
 # xcipmaster
 
-Python 3.9.0 Installation:
-1. wget https://www.python.org/ftp/python/3.9.0/Python-3.9.0.tar.xz
-2. tar -xf Python-3.9.0.tar.xz
-3. cd Python-3.9.0
-4. ./configure --enable-optimizations
-5. make -j 2 (replace 2 with the number of cores in your processor)
-6. sudo make altinstall
-7. python3.9 --version
-[7] OUTPUT: Python 3.9.0
+XCIP Master is a command-line utility for validating Common Industrial Protocol
+(CIP) configurations, exercising mock network traffic, and driving waveform
+generators for device testing.
 
-Set Python3.9 as default python version:
-1. sudo update-alternatives --install /usr/bin/python python /usr/local/bin/python3.9 1
-[1] OUTPUT: update-alternatives: using /usr/local/bin/python3.9 to provide /usr/bin/python (python) in auto mode
-2. python --version
-[2] OUTPUT: Python 3.9.0
+## Installation
 
-Virtualenv Installation using pip:
-1. python -m venv <environment_directory> # Example: python -m venv ./CIP Simulator/phase3/py3_venv (py3_venv is the environment name)
-2. source <environment_directory>/bin/activate
-3. python -m pip install --upgrade pip # Update the pip to latest inside virtual environment
-6. pip install -r requirements.txt # Install the project dependencies from the requirements.txt file into Virtualenv
-7. python main.py # Your environment is now set up. You can start running the tool
-8. deactivate # You can exit the Virtualenv using deactivate command
+The project is distributed as a standard Python package targeting Python 3.10+
+and the latest Scapy releases. To install it into the current environment::
+
+    python -m pip install .
+
+An editable install for development can be created with::
+
+    python -m pip install -e .[packaging]
+
+The optional ``packaging`` extra pulls in PyInstaller so that self-contained
+executables can be generated for specific platforms.
+
+## Usage
+
+Once installed, the ``xcipmaster`` command becomes available. Run ``--help`` to
+discover the interactive shell and subcommands::
+
+    xcipmaster --help
+
+The tool ships with a bundled demonstration configuration located at
+``xcipmaster/conf/cip_xml_config.xml``. When invoked without a ``--config``
+argument the CLI automatically loads this configuration. Supply a directory or
+file path to validate custom CIP XML manifests.
 
 ## Testing helpers
 
