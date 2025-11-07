@@ -31,16 +31,27 @@ def _initialize_controller(
         controller.progress_bar("Initializing", 1)
 
         if controller.cip_test_flag and not ctx.resilient_parsing:
-            if not click.confirm('Do you want to continue?', default=True):
-                click.echo('Exiting...')
+            if not click.confirm("Do you want to continue?", default=True):
+                click.echo("Exiting...")
                 ctx.exit()
 
         default_config_path = str(Path("./conf"))
         if not controller.cip_config(default_config_path):
             raise click.ClickException("CIP configuration failed during initialization.")
 
-        if ENABLE_NETWORK:
-            if not controller.config_network("10.0.1.1", "239.192.1.3"):
+        if ENABLE_NETWORK and not ctx.resilient_parsing:
+            target_ip = click.prompt(
+                "Target IP address",
+                default=controller.target_ip,
+                show_default=True,
+            )
+            multicast_ip = click.prompt(
+                "Multicast group address",
+                default=controller.multicast_ip,
+                show_default=True,
+            )
+
+            if not controller.config_network(target_ip, multicast_ip):
                 raise click.ClickException(
                     "Network configuration failed during initialization."
                 )
@@ -98,12 +109,15 @@ class CIPShell(cmd_module.Cmd):
             pass
 
 
-@click.group()
+@click.group(invoke_without_command=True)
 @click.pass_context
 def cli(ctx):
     """CIP Tool command-line interface."""
     if ctx.obj is None and not ctx.resilient_parsing:
         ctx.obj = _initialize_controller(ctx, CLI)
+
+    if ctx.invoked_subcommand is None and not ctx.args and not ctx.resilient_parsing:
+        ctx.invoke(cmd_shell)
 
 
 @cli.command()
@@ -117,15 +131,13 @@ def cli(ctx):
 )
 @click.option(
     "--target-ip",
-    default="10.0.1.1",
-    show_default=True,
-    help="Target device IP address.",
+    default=None,
+    help="Target device IP address. Defaults to the current setting.",
 )
 @click.option(
     "--multicast-ip",
-    default="239.192.1.3",
-    show_default=True,
-    help="Multicast group IP address for network tests.",
+    default=None,
+    help="Multicast group IP address. Defaults to the current setting.",
 )
 @pass_controller
 def start(controller: CLI, config_path: Path, target_ip: str, multicast_ip: str):
@@ -138,7 +150,10 @@ def start(controller: CLI, config_path: Path, target_ip: str, multicast_ip: str)
     if not controller.cip_config(str(config_path)):
         raise click.ClickException("CIP configuration failed.")
 
-    if not controller.config_network(target_ip, multicast_ip):
+    selected_target_ip = target_ip or controller.target_ip
+    selected_multicast_ip = multicast_ip or controller.multicast_ip
+
+    if not controller.config_network(selected_target_ip, selected_multicast_ip):
         raise click.ClickException("Network configuration failed.")
 
     click.echo("Attempting to Start communication...")
@@ -317,21 +332,50 @@ def cip_config_command(controller: CLI, config_path: Path):
 @cli.command("test-net")
 @click.option(
     "--target-ip",
-    default="10.0.1.1",
-    show_default=True,
-    help="Target device IP address.",
+    default=None,
+    help="Target device IP address. Defaults to the current setting.",
 )
 @click.option(
     "--multicast-ip",
-    default="239.192.1.3",
-    show_default=True,
-    help="Multicast group IP address for network tests.",
+    default=None,
+    help="Multicast group IP address for network tests. Defaults to the current setting.",
 )
 @pass_controller
 def test_net_command(controller: CLI, target_ip: str, multicast_ip: str):
     """Run network configuration tests."""
-    if not controller.config_network(target_ip, multicast_ip):
+    selected_target_ip = target_ip or controller.target_ip
+    selected_multicast_ip = multicast_ip or controller.multicast_ip
+
+    if not controller.config_network(selected_target_ip, selected_multicast_ip):
         raise click.ClickException("Network configuration failed.")
+
+
+@cli.command("set-net")
+@click.option(
+    "--target-ip",
+    default=None,
+    help="New target device IP address. Defaults to the current setting if omitted.",
+)
+@click.option(
+    "--multicast-ip",
+    default=None,
+    help="New multicast group IP address. Defaults to the current setting if omitted.",
+)
+@pass_controller
+def set_net_command(controller: CLI, target_ip: str, multicast_ip: str):
+    """Update the stored network addresses and rerun network tests."""
+
+    updated_target_ip = target_ip or click.prompt(
+        "Target IP address", default=controller.target_ip, show_default=True
+    )
+    updated_multicast_ip = multicast_ip or click.prompt(
+        "Multicast group address", default=controller.multicast_ip, show_default=True
+    )
+
+    if not controller.config_network(updated_target_ip, updated_multicast_ip):
+        raise click.ClickException("Network configuration failed.")
+
+    click.echo("Network settings updated.")
 
 
 @cli.command("log")

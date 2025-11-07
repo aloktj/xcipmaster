@@ -106,6 +106,8 @@ class CLI(UIUtilities):
         self.logger.info("Initializing LoggedClass")
         self.time_zone = self.get_system_timezone()
         self.test_mode = test_mode
+        self.target_ip = "10.0.1.1"
+        self.multicast_ip = "239.192.1.3"
 
     @property
     def ot_packet(self):
@@ -249,6 +251,8 @@ class CLI(UIUtilities):
 
         if result.success:
             time.sleep(0.1)
+            self.target_ip = target_ip
+            self.multicast_ip = multicast_ip
             return True
 
         click.echo("===== Failed Network Configuration Test =====")
@@ -278,6 +282,7 @@ class CLI(UIUtilities):
             ("live <refresh_rate(ms)>", "Display real-time field data of the specified packet class"),
             ("cip-config --config <path>", "Run CIP configuration tests"),
             ("test-net --target-ip <ip> --multicast-ip <ip>", "Run network configuration tests"),
+            ("set-net [--target-ip <ip>] [--multicast-ip <ip>]", "Update stored network addresses and rerun tests"),
             ("log", "Print the recent 100 log events"),
             ("exit", "Exit the application"),
             ("help", "Display this help menu")
