@@ -1,0 +1,7 @@
+pyinstaller==4.10
+click==8.1.7
+ping3==4.0.5
+pyfiglet==1.0.2
+scapy==2.4.3
+tabulate==0.9.0
+termcolor==2.4.0
