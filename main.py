@@ -48,15 +48,31 @@ class CLI:
         *,
         test_mode: bool = False,
     ):
+        """Create a CLI controller with optional service overrides.
+
+        ``config_service``, ``network_service``, and ``comm_manager`` default to
+        their production implementations.  Tests can inject light-weight fakes,
+        for example ``CLI(config_service=my_fake, test_mode=True)``, to avoid
+        touching the real filesystem or network.  ``test_mode`` additionally
+        suppresses the interactive prompts triggered by
+        :func:`_initialize_controller`.
+        """
+
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.config_service = config_service or CIPConfigService(logger=self.logger)
-        self.network_service = network_service or NetworkTestService(logger=self.logger)
+
+        if config_service is None:
+            config_service = CIPConfigService(logger=self.logger)
+        self.config_service = config_service
+
+        if network_service is None:
+            network_service = NetworkTestService(logger=self.logger)
+        self.network_service = network_service
+
         if comm_manager is None:
-            self.comm_manager = CommunicationManager(
+            comm_manager = CommunicationManager(
                 self.config_service, self.network_service, logger=self.logger
             )
-        else:
-            self.comm_manager = comm_manager
+        self.comm_manager = comm_manager
         self.thread_dict = {}  # Dictionary to store wave threads
         self.cip_test_flag = True
         self.logger.info("Initializing LoggedClass")
