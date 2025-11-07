@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE cip SYSTEM "../dtd/cip.dtd">
+
+<cip>
+   <identity id="IDENTITY"
+      vendorId="1250"
+      deviceType="5001"
+      productCode="1"
+      revisionMajor="1"
+      revisionMinor="1"
+      status="0"
+      serialNumber="1"
+      productName="FAIVELEY_Adapter"
+   />
+
+   <assembly id="AS_HEARTBEAT_TO" dir="out"
+      instanceId="0xFE"
+      size="0"
+      subtype="TO"
+      rtf="heartbeat"
+   />
+
+   <assembly id="AS_HEARTBEAT_OT" dir="in"
+      instanceId="0xFE"
+      size="0"
+      subtype="OT_IO"
+      rtf="heartbeat"
+   />
+
+   <assembly id="CONFIG" dir="in"
+      instanceId="0x01"
+      size="0"
+      subtype="config"
+      rtf="config"
+   />
+
+   <assembly id="AS_MPU_DEV" dir="in"
+      instanceId="0x65"
+      size="1120"
+      subtype="OT_EO"
+      rtf="32BH">
+
+      <usint id="MPU_CTCMSAlive" offset="0"/>
+      <udint id="MPU_CDateTimeSec" offset="16"/>
+      <uint  id="MPU_CTrainNum" offset="96"/>
+      <bool  id="MPU_CMaintModeAuth" offset="113"/>
+      <bool  id="MPU_CReprogModeAuth" offset="114"/>
+      <bool  id="MPU_COnDmdTestResume" offset="117"/>
+      <string id="BCHi_CMaintLang" length="2" offset="128"/>
+      <bool  id="BCHi_COnDmdTestStart" offset="306"/>
+      <real  id="MPU_CSpeed" offset="320"/>
+      <usint id="MPU_COperSt" offset="352"/>
+      <usint id="MPU_CNumOfTrainSetsMU" offset="360"/>
+      <usint id="MPU_CTrainSetPosNum" offset="368"/>
+      <usint id="MPU_CCarPosNum" offset="376"/>
+      <string id="MPU_CTrainSetType" length="12" offset="384"/>
+      <string id="MPU_CTrainSetId" length="12" offset="480"/>
+      <string id="MPU_CTrainSetIDUx" length="12" offset="592"/>
+      <string id="MPU_CCarId" length="12" offset="688"/>
+      <real  id="MPU_CLatitude" offset="784"/>
+      <real  id="MPU_CLongitude" offset="816"/>
+      <bool  id="MPU_CGpsValidity" offset="848"/>
+      <usint id="BCHi_CBchEqtNum" offset="872"/>
+      <!-- Applicable Li-ion but NA NICd -->
+      <usint id="BCHi_CBattSOCMaxAck" offset="1056"/>
+      <bool  id="BCHi_CBchInhibReq" offset="1088"/>
+      <bool  id="BCHi_CBchChargingAuth" offset="1089"/>
+      <bool  id="BCHi_CBchAtleastOneLoss" offset="1092"/>
+      <bool  id="BCHi_CBchOnDmdSafetyTestStart" offset="1094"/>
+      <bool  id="BCHi_CBchFltAck" offset="1095"/>
+      <bool  id="BCHi_CBchFltRst" offset="1097"/>
+   </assembly>
+
+   <assembly id="AS_DEV_MPU" dir="out"
+      instanceId="0x64"
+      size="1136"
+      subtype="TO"
+      rtf="32BH">
+      <usint id="BCHi_IDevIsAlive" offset="0"/>
+      <usint id="BCHi_INetwVersionX" offset="8"/>
+      <usint id="BCHi_INetwVersionY" offset="16"/>
+      <usint id="BCHi_INetwVersionZ" offset="24"/>
+      <usint id="BCHi_ISwVersionX" offset="32"/>
+      <usint id="BCHi_ISwVersionY" offset="40"/>
+      <usint id="BCHi_ISwVersionZ" offset="48"/>
+      <usint id="BCHi_IHwVersionX" offset="56"/>
+      <usint id="BCHi_IHwVersionY" offset="64"/>
+      <usint id="BCHi_IHwVersionZ" offset="72"/>
+      <uint id="BCHi_ISerialNum" offset="80"/>
+      <bool id="BCHi_IOper" offset="96"/>
+      <bool id="BCHi_IMajorFltPres" offset="98"/>
+      <bool id="BCHi_IMinorFltPres" offset="99"/>
+      <bool id="BCHi_IInformFltPres" offset="100"/>
+      <bool id="BCHi_IEqtInMaint" offset="101"/>
+      <bool id="BCHi_IOnDmdTestInP" offset="105"/>
+      <bool id="BCHi_IOnDmdTestDone" offset="106"/>
+      <bool id="BCHi_IOnDmdTestOk" offset="107"/>
+      <bool id="BCHi_IAutoTestDone" offset="123"/>
+      <bool id="BCHi_IAutoTestOk" offset="124"/>
+      <real id="BCHi_IBchVoltageLine" offset="128"/>
+      <real id="BCHi_IBchCurrentLine" offset="160"/>
+      <real id="BCHi_IBchVoltageIn" offset="192"/>
+      <real id="BCHi_IBchCurrentIn" offset="224"/>
+      <real id="BCHi_IBchVoltagePS" offset="256"/>
+      <real id="BCHi_IBchCurrentPS" offset="288"/>
+      <real id="BCHi_IBchTemp" offset="400"/>
+      <udint id="BCHi_IBattCustomer1" offset="432"/>
+      <real id="BCHi_IBchVoltageBatt" offset="688"/>
+      <real id="BCHi_IBchCurrentBatt" offset="720"/>
+      <uint id="BCHi_IBattVCellMax" offset="752"/>
+      <uint id="BCHi_IBattVCellMin" offset="768"/>
+      <uint id="BCHi_IBattVCellAvg" offset="784"/>
+      <uint id="BCHi_IBattIntVoltage" offset="800"/>
+      <usint id="BCHi_IBattIntCurrent" offset="816"/>
+      <usint id="BCHi_ISwGWVersionX" offset="880"/>
+      <usint id="BCHi_ISwGWVersionY" offset="888"/>
+      <usint id="BCHi_ISwGWVersionZ" offset="896"/>
+      <uint id="BCHi_IBattIMRC" offset="912"/>
+      <uint id="BCHi_IBattIMD" offset="928"/>
+      <uint id="BCHi_IBattPMD" offset="944"/>
+      <usint id="BCHi_IBattSystMode" offset="968"/>
+      <usint id="BCHi_IBattSOH" offset="976"/>
+      <usint id="BCHi_IBattGblStatus" offset="984"/>
+      <string id="BCHi_IBattFltCodStatus" length="6" offset="992"/>
+      <string id="BCHi_IBattExtTemp" length="2" offset="1040"/>
+      <usint id="BCHi_IBattSOCMax" offset="1064"/>
+      <usint id="BCHi_IBattSOC" offset="1080"/>
+      <usint id="BCHi_IBchGeneralStatus" offset="1088"/>
+      <bool id="BCHi_IBchSafetyCardLVDet" offset="1104"/>
+      <bool id="BCHi_IBchSafetyCardHVDet" offset="1105"/>
+      <bool id="BCHi_IBchSafetyTestInP" offset="1106"/>
+      <bool id="BCHi_IBchSafetyTestOk" offset="1107"/>
+      <bool id="BCHi_IBchCVSRunning" offset="1109"/>
+      <bool id="BCHi_IBchComLostWithBatt" offset="1114"/>
+      <bool id="BCHi_IBchReducPwr" offset="1115"/>
+      <bool id="BCHi_IBchReducPwr320VAC" offset="1116"/>
+   </assembly>
+
+</cip>
