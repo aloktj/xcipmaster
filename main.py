@@ -1,9 +1,7 @@
 import click
 import sys
 import time
-import ping3
 from scapy import all as scapy_all
-import xml.etree.ElementTree as ET
 import os
 import math
 import threading
@@ -13,11 +11,7 @@ import shlex
 import cmd as cmd_module
 from termcolor import colored
 from tabulate import tabulate
-import calendar
 import logging
-import subprocess
-import platform
-import ipaddress
 from datetime import datetime
 from struct import pack, unpack
 import binascii
@@ -25,7 +19,9 @@ import operator
 import struct
 from pathlib import Path
 # from thirdparty.scapy_cip_enip.plc import PLCClient as client
-from thirdparty.scapy_cip_enip.tgv2020 import Client
+from xcipmaster.config import CIPConfigService
+from xcipmaster.network import NetworkTestService
+from xcipmaster.comm import CommunicationManager
 
 
 # Create log directory if it doesn't exist
@@ -43,47 +39,47 @@ ENABLE_NETWORK = True
 DEBUG_CIP_FRAMES=bool(False)
 
 class CLI:
-    lock = threading.Lock()
-    
     def __init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.ip_address = None
-        self.cip_xml_path = None
-        self.net_test_flag = False
-        self.TO_packet = scapy_all.packet
-        self.OT_packet = scapy_all.packet
-        self.root = None
-        self.config_file_names = []
-        self.cip_config_selected = None
-        self.overall_cip_valid = False
-        self.stop_event = None
-        self.stop_events = {}
-        self.stop_comm_events = threading.Event()
-        self.start_comm_thread_instance = None
+        self.config_service = CIPConfigService(logger=self.logger)
+        self.network_service = NetworkTestService(logger=self.logger)
+        self.comm_manager = CommunicationManager(
+            self.config_service, self.network_service, logger=self.logger
+        )
         self.thread_dict = {}  # Dictionary to store wave threads
         self.cip_test_flag = True
         self.logger.info("Initializing LoggedClass")
-        self.can_read_xml_flag = False
-        self.platform_multicast_route = None
-        self.multicast_route_exist = False
-        self.multicast_test_status = False
-        self.user_multicast_address = None
         self.time_zone = self.get_system_timezone()
-        self.MPU_CTCMSAlive = int(0)
-        
-        self.CIP_AppCounter = 65500
-        self.bCIPErrorOccured = bool(False)
-        self.clMPU_CIP_Server = None
-        self.pkgCIP_IO = None
-        self.TO_packet_class = None
-        self.OT_packet_class = None
-        self.xml = None
-        self.ot_eo_assemblies = None
-        self.to_assemblies = None
-        
-        self.enable_auto_reconnect = bool(False) #Positive Logic : True to enable auto connect; Default disabled
-        
-    
+
+    @property
+    def ot_packet(self):
+        return self.config_service.OT_packet
+
+    @ot_packet.setter
+    def ot_packet(self, value):
+        self.config_service.OT_packet = value
+
+    @property
+    def to_packet(self):
+        return self.config_service.TO_packet
+
+    @to_packet.setter
+    def to_packet(self, value):
+        self.config_service.TO_packet = value
+
+    @property
+    def lock(self):
+        return self.comm_manager.lock
+
+    @property
+    def enable_auto_reconnect(self):
+        return self.comm_manager.enable_auto_reconnect
+
+    @property
+    def start_comm_thread_instance(self):
+        return self.comm_manager.start_comm_thread_instance
+
+
     ###-------------------------------------------------------------###
     ###                     Header                                  ###
     ###-------------------------------------------------------------###
@@ -148,66 +144,10 @@ class CLI:
     ###-------------------------------------------------------------###
     
     def get_multicast_route(self):
-        try:
-            # Determine the operating system
-            os_name = platform.system()
-    
-            # Execute the appropriate command based on the operating system
-            if os_name == 'Windows':
-                result = subprocess.run(['route', 'print'], capture_output=True, text=True, check=True)
-            elif os_name in ['Linux', 'Darwin']:
-                result = subprocess.run(['ip', 'route'], capture_output=True, text=True, check=True)
-            else:
-                print("Unsupported operating system:", os_name)
-                return None
-    
-            # Split the output into lines
-            output_lines = result.stdout.split('\n')
-    
-            # Find the multicast route
-            for line in output_lines:
-                if '224.0.0.0/4' in line:
-                    self.multicast_route_exist = True
-                    return '224.0.0.0/4'
-    
-            return None
-        except subprocess.CalledProcessError:
-            # Handle errors if the command fails
-            print(f"Error: Unable to execute command on {os_name}.")
-            return None
-    
-    def check_multicast_support(self):
-        try:
-            # Prompt user for multicast IP address
-            
-            # Convert user provided IP to IPv4Address object
-            user_ip = ipaddress.IPv4Address(self.user_multicast_address)
-            print(f"check_multicast_support:{user_ip}")
+        return self.network_service.get_multicast_route()
 
-            self.platform_multicast_route = self.get_multicast_route()
-            
-            # Convert platform multicast route to IPv4Network object
-            if self.multicast_route_exist:
-                print("Multicast route exists")
-                platform_route = ipaddress.IPv4Network(self.platform_multicast_route)
-        
-                # Check if user provided IP falls within the platform's multicast route
-                print(f"User IP : {user_ip}")
-                print(f"Platform_route: {platform_route}")
-                if user_ip in platform_route:
-                    self.multicast_test_status = True
-                    return True
-                else:
-                    self.multicast_test_status = False
-                    return False
-            else:
-                self.multicast_test_status = False
-                return False
-        except ipaddress.AddressValueError as e:
-            print(f"Exception: {e}")
-            print("Invalid multicast group joining IP address.")
-            self.multicast_test_status = False
-            return False
+    def check_multicast_support(self):
+        return self.network_service.check_multicast_support()
 
     ###-------------------------------------------------------------###
     ###                     Configuration                           ###
@@ -399,17 +339,7 @@ class CLI:
     
     
     def list_files_in_config_folder(self, config_folder: str):
-        folder_path = Path(config_folder).expanduser()
-        self.config_file_names = []
-
-        if not folder_path.exists() or not folder_path.is_dir():
-            click.echo("Config folder does not exist or is not a directory!")
-            return []
-
-        xml_files = sorted(
-            [path for path in folder_path.iterdir() if path.suffix.lower() == ".xml"]
-        )
-        self.config_file_names = [path.name for path in xml_files]
+        xml_files = self.config_service.list_files_in_config_folder(config_folder)
 
         if not xml_files:
             click.echo("No files found in the config folder")
@@ -425,25 +355,11 @@ class CLI:
         return [str(path) for path in xml_files]
 
     def _resolve_cip_config_path(self, config_path: str):
-        path = Path(config_path).expanduser()
-        if path.is_dir():
-            xml_files = self.list_files_in_config_folder(str(path))
-            if not xml_files:
-                return None
-            if len(xml_files) > 1:
-                click.echo(
-                    "Multiple CIP configuration files found. Specify one with --config."
-                )
-                return None
-            return xml_files[0]
-        if path.is_file():
-            if path.suffix.lower() != ".xml":
-                click.echo("CIP configuration file must be an XML file.")
-                return None
-            return str(path)
-
-        click.echo(f"CIP configuration path does not exist: {path}")
-        return None
+        resolved_path = self.config_service.resolve_cip_config_path(config_path)
+        if resolved_path is None:
+            click.echo("CIP configuration path is invalid or ambiguous.")
+            return None
+        return str(resolved_path)
 
     def cip_config(self, config_path: str):
         self.logger.info("Executing cip_config function")
@@ -452,32 +368,26 @@ class CLI:
         click.echo("║          CIP Configuration               ║")
         click.echo("╚══════════════════════════════════════════╝")
 
-        resolved_path = self._resolve_cip_config_path(config_path)
-        if not resolved_path:
-            self.overall_cip_valid = False
+        result = self.config_service.load_configuration(str(config_path))
+        if not result.resolved_path:
+            click.echo("Unable to load CIP configuration. Check the provided path.")
+            click.echo("")
+            self.cip_test_flag = False
             return False
 
-        self.cip_xml_path = resolved_path
-        self.cip_config_selected = Path(resolved_path).name
-
-        click.echo(f"Using CIP configuration: {self.cip_xml_path}")
+        click.echo(f"Using CIP configuration: {result.resolved_path}")
         click.echo("")
         time.sleep(0.1)
 
         click.echo("===== Testing CIP Configuration =====")
 
-        test_cases = [
-            ("CIP XML Validity", self.check_cip_xml_validity),
-        ]
+        table_rows = list(self.config_service.latest_results())
+        if table_rows:
+            click.echo(
+                tabulate(table_rows, headers=["Test Case", "Status"], tablefmt="fancy_grid")
+            )
 
-        self.cip_test_flag = self.overall_cip_valid
-
-        results = []
-        for test_case, test_function in test_cases:
-            result = "OK" if test_function() else "FAILED"
-            results.append([test_case, result])
-
-        if all(result == "OK" for _, result in results):
+        if result.success:
             click.echo("All tests passed successfully.")
             click.echo("")
             self.cip_test_flag = True
@@ -487,105 +397,6 @@ class CLI:
         click.echo("")
         self.cip_test_flag = False
         return False
-
-    def check_cip_config(self):
-        self.logger.info("Executing check_cip_config function")
-
-        results = []
-        xml_filepath = self.cip_xml_path
-
-        if not xml_filepath:
-            click.echo("No CIP configuration file has been provided.")
-            self.overall_cip_valid = False
-            return False
-
-        xml_path = Path(xml_filepath)
-        config_folder = xml_path.parent
-
-        if not config_folder.exists() or not config_folder.is_dir():
-            click.echo("Config folder does not exist or is not a directory!")
-            self.overall_cip_valid = False
-            return False
-
-        xml_files = [file for file in config_folder.iterdir() if file.suffix.lower() == ".xml"]
-        if not xml_files:
-            results.append(["Detect XML in Config Folder", "FAILED"])
-            click.echo(tabulate(results, headers=["Test Case", "Status"], tablefmt="fancy_grid"))
-            self.overall_cip_valid = False
-            return False
-
-        results.append(["Detect XML in Config Folder", "OK"])
-
-        file_exists_status = "OK" if xml_path.exists() else "FAILED"
-        results.append(["CIP Conf File Exists", file_exists_status])
-
-        is_xml_status = "OK" if xml_path.suffix.lower() == ".xml" else "FAILED"
-        results.append(["File is XML", is_xml_status])
-
-        xml_parse_status = ""
-        root = None
-        if file_exists_status == "OK" and is_xml_status == "OK":
-            try:
-                tree = ET.parse(xml_filepath)
-                root = tree.getroot()
-                self.root = root
-                xml_parse_status = "OK"
-            except ET.ParseError as e:
-                xml_parse_status = f"FAILED: {e}"
-        else:
-            xml_parse_status = "SKIPPED"
-        results.append(["Parse XML", xml_parse_status])
-
-        if xml_parse_status == "OK" and root is not None:
-            ot_eo_status = "OK" if self.check_ot_eo(root) else "FAILED"
-            results.append(["One Assembly with Subtype 'OT_EO'", ot_eo_status])
-
-            to_status = "OK" if self.check_to(root) else "FAILED"
-            results.append(["One Assembly with Subtype 'TO'", to_status])
-
-        overall_status = all(status == "OK" for _, status in results if status not in {"SKIPPED"})
-        self.overall_cip_valid = overall_status
-
-        results.append(["Overall Status", "OK" if overall_status else "FAILED"])
-
-        click.echo(tabulate(results, headers=["Test Case", "Status"], tablefmt="fancy_grid"))
-        return overall_status
-
-    def check_ot_eo(self, root):
-        assemblies = root.findall("./assembly")
-        ot_eo_assemblies = [assembly for assembly in assemblies if assembly.get("subtype") == "OT_EO" and len(assembly.findall("*")) >= 1]
-        try:
-            self.ot_eo_assemblies = ot_eo_assemblies[0]
-            self.OT_packet_class, assembly_size = self.create_packet_class(ot_eo_assemblies[0])
-            self.OT_packet = self.OT_packet_class()
-            print(f"Length of OT Assembly Expected: {assembly_size//8}")
-            print(f"Length of OT Assembly Formed: {len(self.OT_packet)}")
-            # print(self.OT_packet.fields_desc)
-            
-        except:
-            print("OT_Packet Creation failed")
-            self.logger.info(f"{self.check_ot_eo.__name__}: OT Packet Initialization Failure")
-        
-        return len(ot_eo_assemblies) == 1
-
-    def check_to(self, root):
-        assemblies = root.findall("./assembly")
-        to_assemblies = [assembly for assembly in assemblies if assembly.get("subtype") == "TO" and len(assembly.findall("*")) >= 1]
-        try:
-            self.to_assemblies = to_assemblies[0]
-            self.TO_packet_class, assembly_size = self.create_packet_class(to_assemblies[0])
-            
-            self.TO_packet = self.TO_packet_class()
-            print(f"Length of OT Assembly Expected: {assembly_size//8}")
-            print(f"Length of OT Assembly Formed: {len(self.TO_packet)}")
-            # print(self.TO_packet.fields_desc)
-        except:
-            print("TO_Packet Creation failed")
-            self.logger.info(f"{self.check_to.__name__}: TO Packet Initialization Failure")
-        return len(to_assemblies) == 1
-
-    def check_cip_xml_validity(self):
-        return self.check_cip_config()
         
     def config_network(self, target_ip: str, multicast_ip: str):
         self.logger.info("Executing config_network function")
@@ -594,81 +405,30 @@ class CLI:
         click.echo("╚══════════════════════════════════════════╝")
         click.echo("")
 
-        self.net_test_flag = False
-        self.multicast_test_status = False
-        self.multicast_route_exist = False
-
         time.sleep(0.1)
 
-        try:
-            self.ip_address = str(ipaddress.IPv4Address(target_ip))
-        except ipaddress.AddressValueError as exc:
-            click.echo(f"Invalid target IP address: {exc}")
-            return False
+        result = self.network_service.configure(target_ip, multicast_ip)
 
-        try:
-            self.user_multicast_address = str(ipaddress.IPv4Address(multicast_ip))
-        except ipaddress.AddressValueError as exc:
-            click.echo(f"Invalid multicast group joining IP address: {exc}")
-            return False
-
-        click.echo(f"Target IP address: {self.ip_address}")
-        click.echo(f"Multicast group address: {self.user_multicast_address}")
+        if result.target_ip:
+            click.echo(f"Target IP address: {result.target_ip}")
+        if result.multicast_ip:
+            click.echo(f"Multicast group address: {result.multicast_ip}")
 
         click.echo("\n===== Testing Communication with Target =====")
-        # click.echo(f" Attempting to Communicate with {self.ip_address}")
         time.sleep(1)
 
-        results = [["Communication Test Result", "Status"]]
-        if self.communicate_with_target():
-            results.append(["Communication with Target", "OK"])
-            # click.echo(" Communication has been Tested -> OK")
-        else:
-            results.append(["Communication with Target", "FAILED"])
-            # click.echo(" Communication has been Tested -> FAILED")
-            
-            
-        if self.check_multicast_support():
-            results.append(["Mutlicast Group Join", "OK"])
-        else:
-            results.append(["Mutlicast Group Join", "FAILED"])
-        
-        if self.multicast_route_exist:
-            results.append(["Mutlicast route Compatibity", "OK"])
-        else:
-            results.append(["Mutlicast route Compatibity", "FAILED"])
-        
-        click.echo("\n" + tabulate(results, headers="firstrow", tablefmt="fancy_grid"))
+        table_data = [["Communication Test Result", "Status"]]
+        table_data.extend(result.tests)
+        click.echo("\n" + tabulate(table_data, headers="firstrow", tablefmt="fancy_grid"))
         click.echo("")
-            
-        
-        if self.net_test_flag and self.multicast_test_status:
+
+        if result.success:
             time.sleep(0.1)
             return True
-        else:
-            click.echo("===== Failed Network Configuration Test =====")
-            click.echo("")
+
+        click.echo("===== Failed Network Configuration Test =====")
+        click.echo("")
         return False
-        
-    def communicate_with_target(self):
-        self.logger.info("Executing communication_with_target function")
-        self.net_test_flag = False
-        try:
-            ###########Testing#############
-            DCU_PING_CMD =  f'ping -c 1 {self.ip_address}'
-            PingResult = os.system(DCU_PING_CMD)
-            print(PingResult)
-            if(PingResult!=0):
-                self.net_test_flag = False
-                return False
-            else:
-                self.net_test_flag = True
-                return True
-        except Exception as e:
-            click.echo("Error occurred: {}".format(e))
-            self.net_test_flag = False
-            time.sleep(0.1)
-            return False
             
             
     ############ Help Menu ############ 
@@ -714,10 +474,10 @@ class CLI:
         self.logger.info(f"field name:{field_name}")
         self.logger.info(f"field value:{field_value}")
         
-        if hasattr(self.OT_packet,field_name):
-            field = getattr(self.OT_packet.__class__, field_name)
+        if hasattr(self.ot_packet,field_name):
+            field = getattr(self.ot_packet.__class__, field_name)
             if isinstance(field, scapy_all.ByteField):
-                    setattr(self.OT_packet, field_name, field_value)
+                    setattr(self.ot_packet, field_name, field_value)
                     self.logger.info("MPU_HeartBeat set")
             else:
                 self.logger.warning("Heartbeat is not ByteField type")
@@ -729,20 +489,20 @@ class CLI:
         self.logger.info("Executing set_field function")
         self.stop_wave(field_name)
         self.lock.acquire()
-        if hasattr(self.OT_packet, field_name):
-            field = getattr(self.OT_packet.__class__, field_name)
+        if hasattr(self.ot_packet, field_name):
+            field = getattr(self.ot_packet.__class__, field_name)
             if isinstance(field, scapy_all.IEEEFloatField):
                 try:
                     byte_array = struct.pack('f', float(field_value))
                     reversed_byte_array = byte_array[::-1]
                     bE_field_value = struct.unpack('f', reversed_byte_array)[0] #Big endian field value
-                    setattr(self.OT_packet, field_name, bE_field_value)
+                    setattr(self.ot_packet, field_name, bE_field_value)
                     print(f"Set {field_name} to {field_value}")
                 except ValueError:
                     print(f"Field {field_name} expects a float value.")
             elif isinstance(field, scapy_all.BitField):
                 if field_value in ['0', '1']:
-                    setattr(self.OT_packet, field_name, int(field_value))
+                    setattr(self.ot_packet, field_name, int(field_value))
                     print(f"Set {field_name} to {field_value}")
                 else:
                     print(f"Field {field_name} expects a value of either '0' or '1'.")
@@ -750,12 +510,12 @@ class CLI:
                 if field_value.startswith('0x') and len(field_value) == 4 and all(
                         c in string.hexdigits for c in field_value[2:]):
                     int_value = int(field_value, 16)
-                    setattr(self.OT_packet, field_name, int_value)
+                    setattr(self.ot_packet, field_name, int_value)
                     print(f"Set {field_name} to {field_value}")
                 elif field_value.isdigit():
                     int_value = int(field_value)
                     if 0 <= int_value <= 0xFF:
-                        setattr(self.OT_packet, field_name, int_value)
+                        setattr(self.ot_packet, field_name, int_value)
                         print(f"Set {field_name} to {field_value}")
                     else:
                         print(f"Field {field_name} expects an integer value between 0 and 255.")
@@ -767,7 +527,7 @@ class CLI:
                 if field_value.startswith('0x') and len(field_value) == 6 and all(
                     c in string.hexdigits for c in field_value[2:]):
                     int_value = int(field_value, 16)
-                    setattr(self.OT_packet, field_name, int(int_value.to_bytes(2, byteorder='big')))
+                    setattr(self.ot_packet, field_name, int(int_value.to_bytes(2, byteorder='big')))
                     print(f"Set {field_name} to {field_value}")
                 elif field_value.isdigit():
                     int_value = int(field_value)
@@ -776,7 +536,7 @@ class CLI:
                             byte_array = int_value.to_bytes(2, byteorder='big')
                             reversed_byte_array = byte_array[::-1]
                             converted_value = int.from_bytes(reversed_byte_array, byteorder='big')
-                            setattr(self.OT_packet, field_name, converted_value)
+                            setattr(self.ot_packet, field_name, converted_value)
                         except:
                             print("Error in setting ShortField")
                         print(f"Set {field_name} to {field_value}")
@@ -792,14 +552,14 @@ class CLI:
                     c in string.hexdigits for c in field_value[2:]):
 
                     int_value = int(field_value, 16)
-                    setattr(self.OT_packet, field_name, int_value.to_bytes(2, byteorder='big'))
+                    setattr(self.ot_packet, field_name, int_value.to_bytes(2, byteorder='big'))
                     print(f"Set {field_name} to {field_value}")
 
                 elif field_value.isdigit():
 
                     int_value = int(field_value)
                     if 0 <= int_value <= 0xFFFF:
-                        setattr(self.OT_packet, field_name, int_value) 
+                        setattr(self.ot_packet, field_name, int_value) 
                         print(f"Set {field_name} to {field_value}")
 
                     else:
@@ -819,7 +579,7 @@ class CLI:
 
                     if 0 <= int_value <= (2**64 - 1):  
 
-                        setattr(self.OT_packet, field_name, int_value)
+                        setattr(self.ot_packet, field_name, int_value)
 
                         print(f"Set {field_name} to {field_value}")
 
@@ -833,7 +593,7 @@ class CLI:
 
                     if 0 <= int_value <= (2**64 - 1):
 
-                        setattr(self.OT_packet, field_name, int_value)  
+                        setattr(self.ot_packet, field_name, int_value)  
 
                         print(f"Set {field_name} to {field_value}")
 
@@ -856,11 +616,11 @@ class CLI:
                     field_bytes = None
 
                 if field_bytes is not None:
-                    if len(field_bytes) <= field.length_from(self.OT_packet):
-                        setattr(self.OT_packet, field_name, field_bytes)
+                    if len(field_bytes) <= field.length_from(self.ot_packet):
+                        setattr(self.ot_packet, field_name, field_bytes)
                         print(f"Set {field_name} to {field_bytes}")
                     else:
-                        print(f"Field {field_name} expects a string of length up to {field.length_from(self.OT_packet)}.")
+                        print(f"Field {field_name} expects a string of length up to {field.length_from(self.ot_packet)}.")
             else:
                 print(f"Field {field_name} is not of type IEEEFloatField, BitField, ByteField, or StrFixedLenField and "
                       f"cannot be set.")
@@ -873,13 +633,13 @@ class CLI:
     def clear_field(self, field_name):
         self.logger.info("Executing clear_field function")
         self.stop_wave(field_name)
-        if hasattr(self.OT_packet, field_name):
-            field = getattr(self.OT_packet.__class__, field_name)
+        if hasattr(self.ot_packet, field_name):
+            field = getattr(self.ot_packet.__class__, field_name)
             if isinstance(field, scapy_all.IEEEFloatField) or isinstance(field, scapy_all.BitField) or isinstance(field, scapy_all.ByteField):
-                setattr(self.OT_packet, field_name, 0)
+                setattr(self.ot_packet, field_name, 0)
                 print(f"Cleared {field_name}")
             elif isinstance(field, scapy_all.StrFixedLenField):
-                setattr(self.OT_packet, field_name, b'')
+                setattr(self.ot_packet, field_name, b'')
                 print(f"Cleared {field_name}")
             else:
                 print(f"Cannot clear field {field_name}: unsupported field type.")
@@ -892,14 +652,14 @@ class CLI:
         click.echo("")
         click.echo(tabulate([[timestamp]], headers=["Timestamp", ""], tablefmt="fancy_grid"))
         
-        if hasattr(self.OT_packet, field_name):
-            field_value = self.get_big_endian_value(self.OT_packet, field_name)
-            packet_type = self.OT_packet.__class__.__name__
+        if hasattr(self.ot_packet, field_name):
+            field_value = self.get_big_endian_value(self.ot_packet, field_name)
+            packet_type = self.ot_packet.__class__.__name__
             field_data = [(packet_type, field_name, self.decrease_font_size(str(field_value)))]
             
-        elif hasattr(self.TO_packet, field_name):
-            field_value = self.get_big_endian_value(self.TO_packet, field_name)
-            packet_type = self.TO_packet.__class__.__name__
+        elif hasattr(self.to_packet, field_name):
+            field_value = self.get_big_endian_value(self.to_packet, field_name)
+            packet_type = self.to_packet.__class__.__name__
             field_data = [(packet_type, field_name, self.decrease_font_size(str(field_value)))]
             
         else:
@@ -956,16 +716,16 @@ class CLI:
         timestamp = self.get_timestamp()
         click.echo(tabulate([[timestamp]], headers=["Timestamp", ""], tablefmt="fancy_grid"))
         self.lock.acquire()
-        class_name_OT = self.OT_packet.__class__.__name__
-        field_data_OT = [(field.name, self.decrease_font_size(str(self.get_big_endian_value(self.OT_packet, field.name)))) for field in self.OT_packet.fields_desc]
+        class_name_OT = self.ot_packet.__class__.__name__
+        field_data_OT = [(field.name, self.decrease_font_size(str(self.get_big_endian_value(self.ot_packet, field.name)))) for field in self.ot_packet.fields_desc]
         self.lock.release()
         click.echo(f"\t\t\t {class_name_OT} \t\t\t")
         click.echo(tabulate(field_data_OT, headers=["Field Name", "Field Value"], tablefmt="fancy_grid"))
         click.echo("")
         
         self.lock.acquire()
-        class_name_TO = self.TO_packet.__class__.__name__
-        field_data_TO = [(field.name, self.decrease_font_size(str(self.get_big_endian_value(self.TO_packet, field.name)))) for field in self.TO_packet.fields_desc]
+        class_name_TO = self.to_packet.__class__.__name__
+        field_data_TO = [(field.name, self.decrease_font_size(str(self.get_big_endian_value(self.to_packet, field.name)))) for field in self.to_packet.fields_desc]
         self.lock.release()
         click.echo(f"\t\t\t {class_name_TO} \t\t\t")
         click.echo(tabulate(field_data_TO, headers=["Field Name", "Field Value"], tablefmt="fancy_grid"))
@@ -1018,9 +778,9 @@ class CLI:
     def list_fields(self):
         self.logger.info("Executing list_fields function")
         
-        self.print_packet_fields(self.OT_packet.__class__.__name__ , self.OT_packet)
+        self.print_packet_fields(self.ot_packet.__class__.__name__ , self.ot_packet)
         
-        self.print_packet_fields(self.TO_packet.__class__.__name__ , self.TO_packet)
+        self.print_packet_fields(self.to_packet.__class__.__name__ , self.to_packet)
         
     
     def get_system_timezone(self):
@@ -1052,14 +812,14 @@ class CLI:
                 timestamp = self.get_timestamp()
                 click.echo(tabulate([[timestamp]], headers=["Timestamp", ""], tablefmt="fancy_grid"))
                 
-                class_name_OT = self.OT_packet.__class__.__name__
-                field_data_OT = [(field.name, self.decrease_font_size(str(getattr(self.OT_packet, field.name)))) for field in self.OT_packet.fields_desc]
+                class_name_OT = self.ot_packet.__class__.__name__
+                field_data_OT = [(field.name, self.decrease_font_size(str(getattr(self.ot_packet, field.name)))) for field in self.ot_packet.fields_desc]
                 click.echo(f"\t\t\t {class_name_OT} \t\t\t")
                 click.echo(tabulate(field_data_OT, headers=["Field Name", "Field Value"], tablefmt="fancy_grid"))
                 click.echo("")
                 
-                class_name_TO = self.TO_packet.__class__.__name__
-                field_data_TO = [(field.name, self.decrease_font_size(str(getattr(self.TO_packet, field.name)))) for field in self.TO_packet.fields_desc]
+                class_name_TO = self.to_packet.__class__.__name__
+                field_data_TO = [(field.name, self.decrease_font_size(str(getattr(self.to_packet, field.name)))) for field in self.to_packet.fields_desc]
                 click.echo(f"\t\t\t {class_name_TO} \t\t\t")
                 click.echo(tabulate(field_data_TO, headers=["Field Name", "Field Value"], tablefmt="fancy_grid"))
                 time.sleep(refresh_rate/1000)  # Adjust the delay as needed for real-time display
@@ -1082,7 +842,7 @@ class CLI:
     def wave_field(self, field_name, max_value, min_value, period_ms):
         self.logger.info("Executing wave_field function")
         self.stop_wave(field_name)
-        field = getattr(self.OT_packet.__class__, field_name)
+        field = getattr(self.ot_packet.__class__, field_name)
         if isinstance(field, scapy_all.IEEEFloatField):
             max_value = float(max_value)
             min_value = float(min_value)
@@ -1100,7 +860,7 @@ class CLI:
 
                     bE_field_value = self._float_to_big_endian_float(wave_value)
                     with self.lock:
-                        setattr(self.OT_packet, field_name, bE_field_value)
+                        setattr(self.ot_packet, field_name, bE_field_value)
 
                     # print(f"Set {field_name} to {wave_value}")
                     time.sleep(0.01)  # Adjust sleep time as needed
@@ -1115,7 +875,7 @@ class CLI:
     def tria_field(self, field_name, max_value, min_value, period_ms):
         self.logger.info("Executing tria_field function")
         self.stop_wave(field_name)
-        field = getattr(self.OT_packet.__class__, field_name)
+        field = getattr(self.ot_packet.__class__, field_name)
         if isinstance(field, scapy_all.IEEEFloatField):
             max_value = float(max_value)
             min_value = float(min_value)
@@ -1133,7 +893,7 @@ class CLI:
                     wave_value = (amplitude * (2 * abs(phase - math.floor(phase + 0.5)) - 1)) + offset
                     bE_field_value = self._float_to_big_endian_float(wave_value)
                     with self.lock:
-                        setattr(self.OT_packet, field_name, bE_field_value)
+                        setattr(self.ot_packet, field_name, bE_field_value)
                     # print(f"Set {field_name} to {wave_value}")
                     time.sleep(0.01)  # Adjust sleep time as needed
 
@@ -1148,7 +908,7 @@ class CLI:
     def box_field(self, field_name, max_value, min_value, period_ms, duty_cycle):
         self.logger.info("Executing box_field function")
         self.stop_wave(field_name)
-        field = getattr(self.OT_packet.__class__, field_name)
+        field = getattr(self.ot_packet.__class__, field_name)
         if isinstance(field, scapy_all.IEEEFloatField):
             max_value = float(max_value)
             min_value = float(min_value)
@@ -1167,7 +927,7 @@ class CLI:
                     wave_value = max_value if (elapsed_time % period_ms) < duty_period else min_value
                     bE_field_value = self._float_to_big_endian_float(wave_value)
                     with self.lock:
-                        setattr(self.OT_packet, field_name, bE_field_value)
+                        setattr(self.ot_packet, field_name, bE_field_value)
                     # print(f"Set {field_name} to {wave_value}")
                     time.sleep(0.01)  # Adjust sleep time as needed
 
@@ -1202,248 +962,6 @@ class CLI:
                 for line in last_100_lines:
                     click.echo(line.strip())
     
-    def calculate_connection_params(self):
-        ot_size = None
-        to_size = None
-                
-        try:
-            ot_size = int(self.ot_eo_assemblies.attrib.get("size"))
-            to_size = int(self.to_assemblies.attrib.get("size"))
-        except:
-            self.logger.info("Unable to fetch assembly size")
-        
-        # Calculate OT_Connection_param and TO_Connection_param
-        if ot_size is not None:
-            ot_connection_param = 0x4800 | ((ot_size // 8) + 6)
-        else:
-            ot_connection_param = None
-        if to_size is not None:
-            to_connection_parma = 0x2800 | ((to_size // 8) + 6)
-        else:
-            to_connection_parma = None
-        
-        return (ot_connection_param,to_connection_parma)
-    
-    def ManageCIP_IOCommunication(self, clMPU_CIP_Server):
-        self.logger.info("Executing ManageCIP_IOCommunication function")
-        
-        #alive byte used by DCU to check MPU activity
-        MPU_CTCMSAlive = int(0)
-        
-        CIP_AppCounter = 65500
-        bCIPErrorOccured = bool(False)
-        
-        #infinite loop to manage CIP IO DCU<->MPU until CIP error occured
-        while(not(bCIPErrorOccured)):
-            
-            pkgCIP_IO = clMPU_CIP_Server.recv_UDP_ENIP_CIP_IO(DEBUG_CIP_FRAMES,0.5)
-            
-            if(pkgCIP_IO != None):
-                self.logger.info("ManageCIP_IOCommunication: pkgCIP_IO - Detected Incoming Stream")
-                
-                # Parse the TO Packet from CIP IO Payload
-                self.lock.acquire()
-                self.TO_packet = self.TO_packet_class((pkgCIP_IO.payload.load))
-                
-                # self.TO_packet.show()
-                self.lock.release()
-                
-                self.lock.acquire()  
-                if(self.TO_packet != None):
-                    self.logger.info("ManageCIP_IOCommunication: TO_packet data parsed successfuly")
-                    if(MPU_CTCMSAlive>=255):
-                        MPU_CTCMSAlive = 0
-                    else:
-                        MPU_CTCMSAlive += 1 ##1 step per 100 ms = 1 step per 100 ms see ICD
-                        
-                    
-                    self.MPU_heartbeat('MPU_CTCMSAlive',MPU_CTCMSAlive)
-                    
-                    self.OT_packet.MPU_CDateTimeSec = calendar.timegm(time.gmtime())
-                    clMPU_CIP_Server.send_UDP_ENIP_CIP_IO(CIP_Sequence_Count=CIP_AppCounter, Header=1,AppData=self.OT_packet)
-                    
-                    #CIP_Sequence_Count must be from 0 to 65535
-                    if(CIP_AppCounter < 65535):
-                        CIP_AppCounter += 1
-                    else:
-                        CIP_AppCounter = 0
-                else:
-                    self.logger.warning("ManageCIP_IOCommunication: TO_packet data parse failed")
-                    bCIPErrorOccured = True
-                
-                self.lock.release()
-                    
-            else:
-                self.logger.warning("Not possible to convert CIP IO frame into scapy packet class")
-                bCIPErrorOccured = True
-                return(bCIPErrorOccured)
-        
-        # end while
-        return(bCIPErrorOccured)
-       
-    def start_comm(self):
-        self.logger.info("Executing CIP Communication Start function")
-
-        if (
-            self.start_comm_thread_instance is not None
-            and self.start_comm_thread_instance.is_alive()
-        ):
-            self.logger.info(
-                "start_comm: Communication thread already running; start request ignored"
-            )
-            return
-
-        if self.enable_auto_reconnect:
-            self.logger.warning("Auto-Reconnect Detected")
-        else:
-            self.logger.warning("Manual Connect Detected")
-
-        ot_param,to_param = self.calculate_connection_params()
-        self.logger.info(f"ot_param:{hex(ot_param)}")
-        self.logger.info(f"to_param:{hex(to_param)}")
-        
-        if ot_param != None:
-            self.logger.warning("start_comm: ot_connection_param is defined")
-        else:
-            self.logger.warning("start_comm: ot_connection_param is None")
-            return
-        if to_param != None:
-            self.logger.warning("start_comm: ot_connection_param is defined")
-        else:
-            self.logger.warning("start_comm: to_connection_param is None")
-            return
-        
-        def start_comm_thread():
-            while self.enable_auto_reconnect or not self.stop_comm_events.is_set():
-                try:
-                    self.logger.info("Executing start_comm_thread function")
-                    self.clMPU_CIP_Server = Client(IPAddr=self.ip_address,MulticastGroupIPaddr=self.user_multicast_address)
-                    self.clMPU_CIP_Server.ot_connection_param = ot_param
-                    self.clMPU_CIP_Server.to_connection_param = to_param
-                    
-                    self.logger.info("Done Printing Param")
-                    
-                    if(self.clMPU_CIP_Server.connected):
-                        self.logger.info(f"start_comm_thread: Established Session{format(self.clMPU_CIP_Server.connected)}")
-                        
-                        # Send forward open and wait DCU response
-                        bForwoardOpenRspIsOK = self.clMPU_CIP_Server.forward_open()
-                        if(bForwoardOpenRspIsOK):
-                            self.logger.info("start_comm_thread: Forward Open OK")
-                        else:
-                            self.logger.warning("start_comm_thread: Forward Open request failed")
-                            raise ConnectionError("Forward Open request failed")
-                        
-                        # Manage CIP IO cyclic communication
-                        self.bCIPErrorOccured = self.ManageCIP_IOCommunication(self.clMPU_CIP_Server)
-                        
-                        if(not(self.bCIPErrorOccured)):
-                            # Close CIP connection
-                            self.clMPU_CIP_Server.forward_close() 
-                            
-                        #Close all sockets
-                        self.clMPU_CIP_Server.close()
-                        
-                        if not self.enable_auto_reconnect:
-                            self.logger.info("start_comm_thread: Auto Reconnect is disabled & thread is exiting")
-                            break
-                
-                    #no connected                    
-                    else:
-                        self.logger.warning("start_comm_thread: Not able to establish session")
-                        raise ConnectionError("Failed to establish session")
-                        
-                except (ConnectionError, Exception) as e:
-                    self.logger.error(f"Connection error: {str(e)}")
-                    if self.enable_auto_reconnect:
-                        self.logger.info("Auto-reconnect is enabled. Retrying in 2 seconds...")
-                        time.sleep(2)
-                    else:
-                        self.logger.info("Auto-reconnect is disabled. Exiting communication thread.")
-                        break
-                    
-                if self.stop_comm_events.is_set():
-                    break
-                
-                if self.enable_auto_reconnect:
-                    time.sleep(2)
-                else:
-                    break
-            
-            self.logger.info("start_comm_thread: Thread has finished execution")
-        
-                
-        self.stop_comm_events.clear()
-        self.start_comm_thread_instance = threading.Thread(
-            target=start_comm_thread,
-            daemon=True,
-        )
-        self.start_comm_thread_instance.start()
-        
-    def enable_auto_com(self):
-        self.logger.info(f"{self.enable_auto_com.__name__}: Automatic Communication enabled")
-        self.enable_auto_reconnect = True
-    
-    def disable_auto_com(self):
-        self.logger.info(f"{self.disable_auto_com.__name__}: Automatic Communication disabled")
-        self.enable_auto_reconnect = False
-        self.stop_comm()  # Stop communication when disabling auto mode
-        
-        
-    def stop_comm(self):
-        self.logger.info(f"{self.stop_comm.__name__}: Stopping comm thread")
-        if self.stop_comm_events is not None:
-            self.stop_comm_events.set() # Set the event to stop the thread
-        else:
-            self.logger.warning(f"{self.stop_comm.__name__}: Stop event is not initialized; nothing to signal")
-        
-        try:
-            if hasattr(self, 'clMPU_CIP_Server') and self.clMPU_CIP_Server is not None:
-                if(not(self.bCIPErrorOccured)):
-                    # Close CIP connection
-                    try:
-                        self.clMPU_CIP_Server.forward_close()
-                        self.logger.info(f"{self.stop_comm.__name__}: Stopping comm thread")
-                    except Exception as e:
-                        self.logger.error(f"{self.stop_comm.__name__}: Error closing CIP connection: {str(e)}")
-                        click.echo(f"Error closing CIP connection: {str(e)}")
-                try:    
-                    self.clMPU_CIP_Server.close()
-                    self.logger.info(f"{self.stop_comm.__name__}: Server connection closed successfully")
-                except Exception as e:
-                    self.logger.error(f"{self.stop_comm.__name__}: Error closing server connection: {str(e)}")
-                    click.echo(f"Error closing server connection: {str(e)}")
-    
-            if (
-                hasattr(self, 'start_comm_thread_instance')
-                and self.start_comm_thread_instance is not None
-                and self.start_comm_thread_instance.is_alive()
-            ):
-                self.start_comm_thread_instance.join(timeout=5) # Wait up to 5 seconds for the thread to finish
-
-                if self.start_comm_thread_instance.is_alive():
-                    self.logger.warning(f"{self.stop_comm.__name__}: Thread did not stop within the timeout period")
-                    click.echo("Warning: Communication thread did not stop within the expected time")
-                else:
-                    self.logger.info(f"{self.stop_comm.__name__}: Thread stopped successfully")
-                    self.start_comm_thread_instance = None
-
-            self.logger.info(f"{self.stop_comm.__name__}: Comm Thread has been successfully stopped")
-
-        except Exception as e:
-            self.logger.error(f"{self.stop_comm.__name__}: Unexpected error while stopping communication: {str(e)}")
-            click.echo(f"Unexpected error while stopping communication: {str(e)}")
-        finally:
-            if (
-                hasattr(self, 'start_comm_thread_instance')
-                and self.start_comm_thread_instance is not None
-                and self.start_comm_thread_instance.is_alive()
-            ):
-                click.echo("Warning: Communication thread is still running")
-            else:
-                click.echo("Communication thread has been successfully stopped")
-                self.start_comm_thread_instance = None
-
 
 def _initialize_controller(ctx: click.Context) -> CLI:
     controller = CLI()
@@ -1560,7 +1078,7 @@ def start(controller: CLI, config_path: Path, target_ip: str, multicast_ip: str)
         raise click.ClickException("Network configuration failed.")
 
     click.echo("Attempting to Start communication...")
-    controller.start_comm()
+    controller.comm_manager.start()
 
     try:
         while (
@@ -1570,7 +1088,7 @@ def start(controller: CLI, config_path: Path, target_ip: str, multicast_ip: str)
             controller.start_comm_thread_instance.join(timeout=0.5)
     except KeyboardInterrupt:
         click.echo("\nStopping communication...")
-        controller.stop_comm()
+        controller.comm_manager.stop()
 
 
 @cli.command()
@@ -1582,7 +1100,7 @@ def stop(controller: CLI):
         return
 
     click.echo("Attempting to Stop communication...")
-    controller.stop_comm()
+    controller.comm_manager.stop()
 
 
 @cli.command()
@@ -1594,8 +1112,8 @@ def auto(controller: CLI):
         return
 
     click.echo("Switching to Auto-Reconnect Mode!")
-    controller.enable_auto_com()
-    controller.start_comm()
+    controller.comm_manager.enable_auto()
+    controller.comm_manager.start()
 
     try:
         while (
@@ -1605,7 +1123,7 @@ def auto(controller: CLI):
             controller.start_comm_thread_instance.join(timeout=0.5)
     except KeyboardInterrupt:
         click.echo("\nStopping communication...")
-        controller.stop_comm()
+        controller.comm_manager.stop()
 
 
 @cli.command()
@@ -1614,7 +1132,7 @@ def man(controller: CLI):
     """Switch to manual communication mode."""
     if controller.enable_auto_reconnect:
         click.echo("Switching to Manual Connect Mode!")
-        controller.disable_auto_com()
+        controller.comm_manager.disable_auto()
         time.sleep(2)
     else:
         click.echo("Already in manual mode")
