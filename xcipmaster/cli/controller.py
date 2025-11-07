@@ -2,8 +2,6 @@
 
 import logging
 import os
-import string
-import struct
 import time
 from datetime import datetime
 from typing import Optional
@@ -18,10 +16,17 @@ from xcipmaster.comm import (
     default_thread_factory,
 )
 from xcipmaster.config import CIPConfigService
+from xcipmaster.fields import (
+    FieldFormatter,
+    FieldFormattingError,
+    FieldMutator,
+    FieldMutationError,
+    WaveformError,
+    WaveformManager,
+)
 from xcipmaster.network import NetworkCommandRunner, NetworkTestService
 
 from .ui import UIUtilities
-from .waveforms import WaveformUtilities
 
 
 log_dir = "./log"
@@ -34,13 +39,16 @@ logging.basicConfig(
 )
 
 
-class CLI(UIUtilities, WaveformUtilities):
+class CLI(UIUtilities):
     def __init__(
         self,
         config_service: Optional[CIPConfigService] = None,
         network_service: Optional[NetworkTestService] = None,
         comm_manager: Optional[CommunicationManager] = None,
         *,
+        field_mutator: Optional[FieldMutator] = None,
+        field_formatter: Optional[FieldFormatter] = None,
+        waveform_manager: Optional[WaveformManager] = None,
         test_mode: bool = False,
     ):
         """Create a CLI controller with optional service overrides.
@@ -78,8 +86,22 @@ class CLI(UIUtilities, WaveformUtilities):
                 thread_factory=default_thread_factory,
             )
         self.comm_manager = comm_manager
-        self.thread_dict = {}  # Dictionary to store wave threads
-        self.stop_events = {}
+
+        if field_mutator is None:
+            field_mutator = FieldMutator()
+        self.field_mutator = field_mutator
+
+        if field_formatter is None:
+            field_formatter = FieldFormatter()
+        self.field_formatter = field_formatter
+
+        if waveform_manager is None:
+            waveform_manager = WaveformManager(
+                lambda: self.ot_packet,
+                self.field_mutator,
+                lock=self.comm_manager.lock,
+            )
+        self.wave_manager = waveform_manager
         self.cip_test_flag = True
         self.logger.info("Initializing LoggedClass")
         self.time_zone = self.get_system_timezone()
@@ -271,7 +293,14 @@ class CLI(UIUtilities, WaveformUtilities):
     ###-------------------------------------------------------------###
     ###                     Modification                            ###
     ###-------------------------------------------------------------###
-    
+
+    def _resolve_packet_for_field(self, field_name):
+        if hasattr(self.ot_packet.__class__, field_name):
+            return self.ot_packet, "OT_EO"
+        if hasattr(self.to_packet.__class__, field_name):
+            return self.to_packet, "TO"
+        return None, None
+
     def MPU_heartbeat(self, field_name,field_value):
         self.logger.info("MPU_HeartBeat function executing")
         self.logger.info(f"field name:{field_name}")
@@ -291,251 +320,144 @@ class CLI(UIUtilities, WaveformUtilities):
     def set_field(self, field_name, field_value):
         self.logger.info("Executing set_field function")
         self.stop_wave(field_name)
-        self.lock.acquire()
-        if hasattr(self.ot_packet, field_name):
-            field = getattr(self.ot_packet.__class__, field_name)
-            if isinstance(field, scapy_all.IEEEFloatField):
-                try:
-                    byte_array = struct.pack('f', float(field_value))
-                    reversed_byte_array = byte_array[::-1]
-                    bE_field_value = struct.unpack('f', reversed_byte_array)[0] #Big endian field value
-                    setattr(self.ot_packet, field_name, bE_field_value)
-                    print(f"Set {field_name} to {field_value}")
-                except ValueError:
-                    print(f"Field {field_name} expects a float value.")
-            elif isinstance(field, scapy_all.BitField):
-                if field_value in ['0', '1']:
-                    setattr(self.ot_packet, field_name, int(field_value))
-                    print(f"Set {field_name} to {field_value}")
-                else:
-                    print(f"Field {field_name} expects a value of either '0' or '1'.")
-            elif isinstance(field, scapy_all.ByteField):
-                if field_value.startswith('0x') and len(field_value) == 4 and all(
-                        c in string.hexdigits for c in field_value[2:]):
-                    int_value = int(field_value, 16)
-                    setattr(self.ot_packet, field_name, int_value)
-                    print(f"Set {field_name} to {field_value}")
-                elif field_value.isdigit():
-                    int_value = int(field_value)
-                    if 0 <= int_value <= 0xFF:
-                        setattr(self.ot_packet, field_name, int_value)
-                        print(f"Set {field_name} to {field_value}")
-                    else:
-                        print(f"Field {field_name} expects an integer value between 0 and 255.")
-                else:
-                    print(
-                        f"Field {field_name} expects an integer value or a hexadecimal value in the format '0x00' to '0xFF'.")
-            
-            elif isinstance(field, scapy_all.ShortField):
-                if field_value.startswith('0x') and len(field_value) == 6 and all(
-                    c in string.hexdigits for c in field_value[2:]):
-                    int_value = int(field_value, 16)
-                    setattr(self.ot_packet, field_name, int(int_value.to_bytes(2, byteorder='big')))
-                    print(f"Set {field_name} to {field_value}")
-                elif field_value.isdigit():
-                    int_value = int(field_value)
-                    if 0 <= int_value <= 0xFFFF:
-                        try:
-                            byte_array = int_value.to_bytes(2, byteorder='big')
-                            reversed_byte_array = byte_array[::-1]
-                            converted_value = int.from_bytes(reversed_byte_array, byteorder='big')
-                            setattr(self.ot_packet, field_name, converted_value)
-                        except:
-                            print("Error in setting ShortField")
-                        print(f"Set {field_name} to {field_value}")
-                    else:
-                        print(f"Field {field_name} expects an integer value between 0 and 65535.")
-                else:
-                    print(f"Field {field_name} expects an integer value or a hexadecimal value in the format '0x0000' to '0xFFFF'.")
-            
-            ###
-            elif isinstance(field, scapy_all.LEShortField):
-
-                if field_value.startswith('0x') and len(field_value) == 4 and all(
-                    c in string.hexdigits for c in field_value[2:]):
-
-                    int_value = int(field_value, 16)
-                    setattr(self.ot_packet, field_name, int_value.to_bytes(2, byteorder='big'))
-                    print(f"Set {field_name} to {field_value}")
-
-                elif field_value.isdigit():
-
-                    int_value = int(field_value)
-                    if 0 <= int_value <= 0xFFFF:
-                        setattr(self.ot_packet, field_name, int_value) 
-                        print(f"Set {field_name} to {field_value}")
-
-                    else:
-                        print(f"Field {field_name} expects an integer value between 0 and 65535.")
-
-                else:
-
-                    print(f"Field {field_name} expects an integer value or a hexadecimal value in the format '0x0000' to '0xFFFF'.")
-                            
-            ###
-            
-            elif isinstance(field, scapy_all.IEEEDoubleField):
-
-                if field_value.startswith('0x'):
-
-                    int_value = int(field_value, 16)
-
-                    if 0 <= int_value <= (2**64 - 1):  
-
-                        setattr(self.ot_packet, field_name, int_value)
-
-                        print(f"Set {field_name} to {field_value}")
-
-                    else:
-
-                        print("Value out of range for IEEEDoubleField")
-
-                elif field_value.isdigit():
-
-                    int_value = float(field_value)
-
-                    if 0 <= int_value <= (2**64 - 1):
-
-                        setattr(self.ot_packet, field_name, int_value)  
-
-                        print(f"Set {field_name} to {field_value}")
-
-                    else:
-
-                        print("Value out of range for IEEEDoubleField")
-
-                else:
-
-                    print("Field value must be a number for IEEEDoubleField")
-            
-            
-            elif isinstance(field, scapy_all.StrFixedLenField):
-                if isinstance(field_value, str):
-                    field_bytes = field_value.encode()
-                elif isinstance(field_value, bytes):
-                    field_bytes = field_value
-                else:
-                    print(f"Field {field_name} expects a string or bytes value.")
-                    field_bytes = None
-
-                if field_bytes is not None:
-                    if len(field_bytes) <= field.length_from(self.ot_packet):
-                        setattr(self.ot_packet, field_name, field_bytes)
-                        print(f"Set {field_name} to {field_bytes}")
-                    else:
-                        print(f"Field {field_name} expects a string of length up to {field.length_from(self.ot_packet)}.")
-            else:
-                print(f"Field {field_name} is not of type IEEEFloatField, BitField, ByteField, or StrFixedLenField and "
-                      f"cannot be set.")
-        else:
+        packet, _ = self._resolve_packet_for_field(field_name)
+        if packet is None:
             print(f"Field {field_name} not found.")
-            
-        self.lock.release()
-        
-       
+            return False
+
+        try:
+            with self.lock:
+                self.field_mutator.set_value(packet, field_name, field_value)
+        except FieldMutationError as exc:
+            print(str(exc))
+            return False
+
+        print(f"Set {field_name} to {field_value}")
+        return True
+
     def clear_field(self, field_name):
         self.logger.info("Executing clear_field function")
         self.stop_wave(field_name)
-        if hasattr(self.ot_packet, field_name):
-            field = getattr(self.ot_packet.__class__, field_name)
-            if isinstance(field, scapy_all.IEEEFloatField) or isinstance(field, scapy_all.BitField) or isinstance(field, scapy_all.ByteField):
-                setattr(self.ot_packet, field_name, 0)
-                print(f"Cleared {field_name}")
-            elif isinstance(field, scapy_all.StrFixedLenField):
-                setattr(self.ot_packet, field_name, b'')
-                print(f"Cleared {field_name}")
-            else:
-                print(f"Cannot clear field {field_name}: unsupported field type.")
-        else:
+        packet, _ = self._resolve_packet_for_field(field_name)
+        if packet is None:
             print(f"Field {field_name} not found.")
-            
+            return False
+
+        try:
+            with self.lock:
+                self.field_mutator.clear_value(packet, field_name)
+        except FieldMutationError as exc:
+            print(str(exc))
+            return False
+
+        print(f"Cleared {field_name}")
+        return True
+
+    def wave_field(self, field_name, max_value, min_value, period_ms):
+        self.logger.info("Executing wave_field function")
+        try:
+            self.wave_manager.start_wave(field_name, max_value, min_value, period_ms)
+        except WaveformError as exc:
+            print(str(exc))
+            return False
+
+        print(
+            f"Waving {field_name} from {min_value} to {max_value} every {period_ms} milliseconds."
+        )
+        return True
+
+    def tria_field(self, field_name, max_value, min_value, period_ms):
+        self.logger.info("Executing tria_field function")
+        try:
+            self.wave_manager.start_triangle_wave(field_name, max_value, min_value, period_ms)
+        except WaveformError as exc:
+            print(str(exc))
+            return False
+
+        print(
+            f"Generating triangular wave for {field_name} every {period_ms} milliseconds."
+        )
+        return True
+
+    def box_field(self, field_name, max_value, min_value, period_ms, duty_cycle):
+        self.logger.info("Executing box_field function")
+        try:
+            self.wave_manager.start_square_wave(
+                field_name, max_value, min_value, period_ms, duty_cycle
+            )
+        except WaveformError as exc:
+            print(str(exc))
+            return False
+
+        print(
+            f"Generating square wave for {field_name} with duty cycle {duty_cycle} every {period_ms} milliseconds."
+        )
+        return True
+
+    def stop_wave(self, field_name):
+        self.logger.info("Executing stop_wave function")
+        if self.wave_manager.stop_wave(field_name):
+            click.echo(f"\nWaving for '{field_name}' has been stopped.\n")
+            return True
+        return False
+
+    def stop_all_thread(self):
+        self.logger.info("Stopping all wave threads")
+        stopped_fields = self.wave_manager.stop_all()
+        for name in stopped_fields:
+            click.echo(f"{self.stop_all_thread.__name__}: Waving for '{name}' has been stopped")
+        if stopped_fields:
+            self.logger.info("All wave threads have been successfully stopped")
+        return bool(stopped_fields)
+
     def get_field(self, field_name):
         self.logger.info("Executing get_field function")
         timestamp = self.get_timestamp()
         click.echo("")
         click.echo(tabulate([[timestamp]], headers=["Timestamp", ""], tablefmt="fancy_grid"))
-        
-        if hasattr(self.ot_packet, field_name):
-            field_value = self.get_big_endian_value(self.ot_packet, field_name)
-            packet_type = self.ot_packet.__class__.__name__
-            field_data = [(packet_type, field_name, self.decrease_font_size(str(field_value)))]
-            
-        elif hasattr(self.to_packet, field_name):
-            field_value = self.get_big_endian_value(self.to_packet, field_name)
-            packet_type = self.to_packet.__class__.__name__
-            field_data = [(packet_type, field_name, self.decrease_font_size(str(field_value)))]
-            
-        else:
+
+        packet, _ = self._resolve_packet_for_field(field_name)
+        if packet is None:
             packet_type = "N/A"
-            field_data = [(packet_type, field_name, "Field not found")]
-        
-        click.echo(tabulate(field_data, headers=["CIP-MSG Identifier", "Field Name", "Field Value"], tablefmt="fancy_grid"))
-        click.echo("")
-          
-    def get_big_endian_value(self, packet, field_name):
-        field = getattr(packet.__class__, field_name)
-        field_value = getattr(packet, field_name)
-
-        if isinstance(field, scapy_all.IEEEFloatField):
-            byte_array = struct.pack('f', float(field_value))
-            reversed_byte_array = byte_array[::-1]
-            bE_field_value = struct.unpack('f', reversed_byte_array)[0]  # Big endian field value
-            return bE_field_value
-
-        elif isinstance(field, scapy_all.ShortField):
-            byte_array = int(field_value).to_bytes(2, byteorder='big')
-            reversed_byte_array = byte_array[::-1]
-            bE_field_value = int.from_bytes(reversed_byte_array, byteorder='big')
-            return bE_field_value
-
-        elif isinstance(field, scapy_all.ByteField):
-            byte_array = int(field_value).to_bytes(1, byteorder='big')
-            reversed_byte_array = byte_array[::-1]
-            bE_field_value = int.from_bytes(reversed_byte_array, byteorder='big')
-            return bE_field_value
-
-        elif isinstance(field, scapy_all.IntField):
-            byte_array = int(field_value).to_bytes(4, byteorder='big')
-            reversed_byte_array = byte_array[::-1]
-            bE_field_value = int.from_bytes(reversed_byte_array, byteorder='big')
-            return bE_field_value
-
-        elif isinstance(field, scapy_all.LongField):
-            byte_array = int(field_value).to_bytes(8, byteorder='big')
-            reversed_byte_array = byte_array[::-1]
-            bE_field_value = int.from_bytes(reversed_byte_array, byteorder='big')
-            return bE_field_value
-
-        elif isinstance(field, scapy_all.StrField):
-            return field_value
-
+            display_value = "Field not found"
         else:
-            return field_value
-    
-    def print_frame(self):
-        # Print timestamp
-        print(*"=" * 50, sep="")
+            packet_type = packet.__class__.__name__
+            try:
+                field_value = self.field_formatter.format_value(packet, field_name)
+                display_value = self.decrease_font_size(str(field_value))
+            except FieldFormattingError as exc:
+                display_value = str(exc)
+
+        field_data = [(packet_type, field_name, display_value)]
+        click.echo(
+            tabulate(
+                field_data,
+                headers=["CIP-MSG Identifier", "Field Name", "Field Value"],
+                tablefmt="fancy_grid",
+            )
+        )
         click.echo("")
-        timestamp = self.get_timestamp()
-        click.echo(tabulate([[timestamp]], headers=["Timestamp", ""], tablefmt="fancy_grid"))
-        self.lock.acquire()
-        class_name_OT = self.ot_packet.__class__.__name__
-        field_data_OT = [(field.name, self.decrease_font_size(str(self.get_big_endian_value(self.ot_packet, field.name)))) for field in self.ot_packet.fields_desc]
-        self.lock.release()
-        click.echo(f"\t\t\t {class_name_OT} \t\t\t")
-        click.echo(tabulate(field_data_OT, headers=["Field Name", "Field Value"], tablefmt="fancy_grid"))
-        click.echo("")
-        
-        self.lock.acquire()
-        class_name_TO = self.to_packet.__class__.__name__
-        field_data_TO = [(field.name, self.decrease_font_size(str(self.get_big_endian_value(self.to_packet, field.name)))) for field in self.to_packet.fields_desc]
-        self.lock.release()
-        click.echo(f"\t\t\t {class_name_TO} \t\t\t")
-        click.echo(tabulate(field_data_TO, headers=["Field Name", "Field Value"], tablefmt="fancy_grid"))
-        click.echo("")
-        print(*"=" * 50, sep="")
-    
-    
+
+    def get_big_endian_value(self, packet, field_name):
+        return self.field_formatter.format_value(packet, field_name)
+
+    def _format_packet_fields(self, packet):
+        if packet is None:
+            return []
+
+        formatted = []
+        for field in getattr(packet, "fields_desc", []):
+            name = getattr(field, "name", "")
+            if not name:
+                continue
+            try:
+                value = self.field_formatter.format_value(packet, name)
+                display = self.decrease_font_size(str(value))
+            except FieldFormattingError as exc:
+                display = str(exc)
+            formatted.append((name, display))
+        return formatted
+
     def print_packet_fields(self, title, packet, show_spares=False, subtype=None):
         # Organizing fields by type for the given packet
         fields_by_type = {}
@@ -629,13 +551,13 @@ class CLI(UIUtilities, WaveformUtilities):
                 click.echo(tabulate([[timestamp]], headers=["Timestamp", ""], tablefmt="fancy_grid"))
                 
                 class_name_OT = self.ot_packet.__class__.__name__
-                field_data_OT = [(field.name, self.decrease_font_size(str(getattr(self.ot_packet, field.name)))) for field in self.ot_packet.fields_desc]
+                field_data_OT = self._format_packet_fields(self.ot_packet)
                 click.echo(f"\t\t\t {class_name_OT} \t\t\t")
                 click.echo(tabulate(field_data_OT, headers=["Field Name", "Field Value"], tablefmt="fancy_grid"))
                 click.echo("")
-                
+
                 class_name_TO = self.to_packet.__class__.__name__
-                field_data_TO = [(field.name, self.decrease_font_size(str(getattr(self.to_packet, field.name)))) for field in self.to_packet.fields_desc]
+                field_data_TO = self._format_packet_fields(self.to_packet)
                 click.echo(f"\t\t\t {class_name_TO} \t\t\t")
                 click.echo(tabulate(field_data_TO, headers=["Field Name", "Field Value"], tablefmt="fancy_grid"))
                 time.sleep(refresh_rate/1000)  # Adjust the delay as needed for real-time display

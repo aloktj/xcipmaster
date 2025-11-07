@@ -84,6 +84,88 @@ class FakeCommManager:
         return self._thread
 
 
+
+class RecordingFieldMutator:
+    def __init__(self):
+        self.set_calls = []
+        self.clear_calls = []
+
+    def set_value(self, packet, field_name, value):
+        self.set_calls.append((packet, field_name, value))
+        return value
+
+    def clear_value(self, packet, field_name):
+        self.clear_calls.append((packet, field_name))
+        return None
+
+
+class RecordingFieldFormatter:
+    def __init__(self, values=None):
+        self.values = values or {}
+        self.calls = []
+
+    def format_value(self, packet, field_name):
+        self.calls.append((packet, field_name))
+        return self.values.get(field_name, "formatted")
+
+
+class FakeWaveformManager:
+    def __init__(self):
+        self.wave_calls = []
+        self.tria_calls = []
+        self.box_calls = []
+        self.stopped = []
+        self.stop_all_calls = 0
+        self.active = set()
+
+    def start_wave(self, field_name, max_value, min_value, period_ms):
+        self.wave_calls.append((field_name, max_value, min_value, period_ms))
+        self.active.add(field_name)
+
+    def start_triangle_wave(self, field_name, max_value, min_value, period_ms):
+        self.tria_calls.append((field_name, max_value, min_value, period_ms))
+        self.active.add(field_name)
+
+    def start_square_wave(self, field_name, max_value, min_value, period_ms, duty_cycle):
+        self.box_calls.append((field_name, max_value, min_value, period_ms, duty_cycle))
+        self.active.add(field_name)
+
+    def stop_wave(self, field_name):
+        if field_name in self.active:
+            self.active.remove(field_name)
+            self.stopped.append(field_name)
+            return True
+        return False
+
+    def stop_all(self):
+        self.stop_all_calls += 1
+        self.stopped.extend(sorted(self.active))
+        self.active.clear()
+        return tuple(self.stopped)
+
+
+def _packet_with_field(field_name):
+    packet_cls = type("Packet", (), {"fields_desc": [], field_name: 0})
+    return packet_cls()
+
+
+def _make_controller_with_stubs(*, field_mutator=None, field_formatter=None, wave_manager=None):
+    fake_config = FakeConfigService()
+    fake_network = FakeNetworkService()
+    fake_comm = FakeCommManager()
+    packet = _packet_with_field("example")
+    fake_config.set_packet_instance("OT_EO", packet)
+    controller = CLI(
+        config_service=fake_config,
+        network_service=fake_network,
+        comm_manager=fake_comm,
+        field_mutator=field_mutator or RecordingFieldMutator(),
+        field_formatter=field_formatter or RecordingFieldFormatter(),
+        waveform_manager=wave_manager or FakeWaveformManager(),
+        test_mode=True,
+)
+    return controller, packet
+
 def test_initialize_controller_skips_interactive_side_effects(monkeypatch):
     def fail_confirm(*args, **kwargs):  # pragma: no cover - defensive
         pytest.fail("click.confirm should not be called in test mode")
@@ -140,3 +222,51 @@ def test_start_command_uses_stubbed_services(monkeypatch):
     assert fake_config.load_calls, "CIP configuration should be invoked"
     assert fake_network.configure_calls, "Network configuration should be invoked"
     assert fake_comm.started is True
+
+
+def test_set_field_delegates_to_mutator():
+    mutator = RecordingFieldMutator()
+    controller, packet = _make_controller_with_stubs(field_mutator=mutator)
+    result = controller.set_field("example", "value")
+    assert result is True
+    assert mutator.set_calls == [(packet, "example", "value")]
+
+
+def test_clear_field_delegates_to_mutator():
+    mutator = RecordingFieldMutator()
+    controller, packet = _make_controller_with_stubs(field_mutator=mutator)
+    result = controller.clear_field("example")
+    assert result is True
+    assert mutator.clear_calls == [(packet, "example")]
+
+
+def test_get_field_uses_formatter(capsys):
+    formatter = RecordingFieldFormatter({"example": "formatted"})
+    controller, packet = _make_controller_with_stubs(field_formatter=formatter)
+    controller.get_field("example")
+    assert formatter.calls == [(packet, "example")]
+    output = capsys.readouterr().out
+    assert "formatted" in output
+
+
+def test_wave_methods_delegate_to_manager(capsys):
+    manager = FakeWaveformManager()
+    controller, _ = _make_controller_with_stubs(wave_manager=manager)
+
+    assert controller.wave_field("example", 5, 1, 100)
+    assert manager.wave_calls == [("example", 5, 1, 100)]
+
+    assert controller.tria_field("example", 5, 1, 200)
+    assert manager.tria_calls == [("example", 5, 1, 200)]
+
+    assert controller.box_field("example", 5, 1, 300, 0.4)
+    assert manager.box_calls == [("example", 5, 1, 300, 0.4)]
+
+    assert controller.stop_wave("example")
+    assert manager.stopped == ["example"]
+
+    manager.stopped.append("second")
+    assert controller.stop_all_thread()
+    output = capsys.readouterr().out
+    assert "second" in output
+    assert manager.stop_all_calls == 1
