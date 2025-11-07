@@ -27,35 +27,40 @@ def _initialize_controller(
 
     controller = factory()
 
-    if not controller.test_mode:
+    if not controller.test_mode and not ctx.resilient_parsing:
         controller.display_banner()
         controller.progress_bar("Initializing", 1)
 
-        if controller.cip_test_flag and not ctx.resilient_parsing:
+        invoked_command = ctx.invoked_subcommand
+        has_subcommand = bool(invoked_command or ctx.args)
+
+        if not has_subcommand and controller.cip_test_flag:
             if not click.confirm("Do you want to continue?", default=True):
                 click.echo("Exiting...")
                 ctx.exit()
 
-        default_config_path = str(default_config_directory())
-        if not controller.cip_config(default_config_path):
-            raise click.ClickException("CIP configuration failed during initialization.")
+        if not has_subcommand:
+            if not controller.ensure_configuration(controller.default_config_path):
+                raise click.ClickException("CIP configuration failed during initialization.")
 
-        if ENABLE_NETWORK and not ctx.resilient_parsing:
-            target_ip = click.prompt(
-                "Target IP address",
-                default=controller.target_ip,
-                show_default=True,
-            )
-            multicast_ip = click.prompt(
-                "Multicast group address",
-                default=controller.multicast_ip,
-                show_default=True,
-            )
-
-            if not controller.config_network(target_ip, multicast_ip):
-                raise click.ClickException(
-                    "Network configuration failed during initialization."
+            if ENABLE_NETWORK:
+                target_ip = click.prompt(
+                    "Target IP address",
+                    default=controller.target_ip,
+                    show_default=True,
                 )
+                multicast_ip = click.prompt(
+                    "Multicast group address",
+                    default=controller.multicast_ip,
+                    show_default=True,
+                )
+
+                if not controller.ensure_network_configuration(
+                    target_ip, multicast_ip, force=True
+                ):
+                    raise click.ClickException(
+                        "Network configuration failed during initialization."
+                    )
 
     return controller
 
@@ -148,13 +153,17 @@ def start(controller: CLI, config_path: Path, target_ip: str, multicast_ip: str)
         click.echo("Disabled auto-Connect using the CMD: <man> and try again !!!")
         return
 
-    if not controller.cip_config(str(config_path)):
+    if not controller.ensure_configuration(str(config_path)):
         raise click.ClickException("CIP configuration failed.")
 
     selected_target_ip = target_ip or controller.target_ip
     selected_multicast_ip = multicast_ip or controller.multicast_ip
 
-    if not controller.config_network(selected_target_ip, selected_multicast_ip):
+    force_network = bool(target_ip or multicast_ip)
+
+    if not controller.ensure_network_configuration(
+        selected_target_ip, selected_multicast_ip, force=force_network
+    ):
         raise click.ClickException("Network configuration failed.")
 
     click.echo("Attempting to Start communication...")
@@ -191,6 +200,12 @@ def auto(controller: CLI):
         click.echo("Already in auto-reconnect mode.")
         return
 
+    if not controller.ensure_configuration():
+        raise click.ClickException("CIP configuration failed.")
+
+    if ENABLE_NETWORK and not controller.ensure_network_configuration():
+        raise click.ClickException("Network configuration failed.")
+
     click.echo("Switching to Auto-Reconnect Mode!")
     controller.comm_manager.enable_auto()
     controller.comm_manager.start()
@@ -224,6 +239,8 @@ def man(controller: CLI):
 @pass_controller
 def set_field_command(controller: CLI, field_name: str, value: str):
     """Set a field value."""
+    if not controller.ensure_configuration():
+        raise click.ClickException("CIP configuration failed.")
     controller.set_field(field_name, value)
 
 
@@ -232,6 +249,8 @@ def set_field_command(controller: CLI, field_name: str, value: str):
 @pass_controller
 def clear_field_command(controller: CLI, field_name: str):
     """Clear a field value."""
+    if not controller.ensure_configuration():
+        raise click.ClickException("CIP configuration failed.")
     controller.clear_field(field_name)
 
 
@@ -240,6 +259,8 @@ def clear_field_command(controller: CLI, field_name: str):
 @pass_controller
 def get_field_command(controller: CLI, field_name: str):
     """Get the current value of a field."""
+    if not controller.ensure_configuration():
+        raise click.ClickException("CIP configuration failed.")
     controller.get_field(field_name)
 
 
@@ -247,6 +268,8 @@ def get_field_command(controller: CLI, field_name: str):
 @pass_controller
 def frame_command(controller: CLI):
     """Print the packet header and payload."""
+    if not controller.ensure_configuration():
+        raise click.ClickException("CIP configuration failed.")
     controller.print_frame()
 
 
@@ -254,6 +277,8 @@ def frame_command(controller: CLI):
 @pass_controller
 def fields_command(controller: CLI):
     """Display available fields."""
+    if not controller.ensure_configuration():
+        raise click.ClickException("CIP configuration failed.")
     controller.list_fields()
 
 
@@ -265,6 +290,8 @@ def fields_command(controller: CLI):
 @pass_controller
 def wave_command(controller: CLI, field_name: str, max_value: float, min_value: float, period: int):
     """Start a sine waveform for a field."""
+    if not controller.ensure_configuration():
+        raise click.ClickException("CIP configuration failed.")
     controller.wave_field(field_name, max_value, min_value, period)
 
 
@@ -276,6 +303,8 @@ def wave_command(controller: CLI, field_name: str, max_value: float, min_value: 
 @pass_controller
 def tria_command(controller: CLI, field_name: str, max_value: float, min_value: float, period: int):
     """Start a triangular waveform for a field."""
+    if not controller.ensure_configuration():
+        raise click.ClickException("CIP configuration failed.")
     controller.tria_field(field_name, max_value, min_value, period)
 
 
@@ -295,6 +324,8 @@ def box_command(
     duty_cycle: float,
 ):
     """Start a square waveform for a field."""
+    if not controller.ensure_configuration():
+        raise click.ClickException("CIP configuration failed.")
     controller.box_field(field_name, max_value, min_value, period, duty_cycle)
 
 
@@ -303,6 +334,8 @@ def box_command(
 @pass_controller
 def live_command(controller: CLI, refresh_rate: float):
     """Display live field data."""
+    if not controller.ensure_configuration():
+        raise click.ClickException("CIP configuration failed.")
     controller.live_field_data(refresh_rate)
 
 
@@ -311,6 +344,8 @@ def live_command(controller: CLI, refresh_rate: float):
 @pass_controller
 def stop_wave_command(controller: CLI, field_name: str):
     """Stop waveform generation for a field."""
+    if not controller.ensure_configuration():
+        raise click.ClickException("CIP configuration failed.")
     controller.stop_wave(field_name)
 
 
@@ -326,7 +361,7 @@ def stop_wave_command(controller: CLI, field_name: str):
 @pass_controller
 def cip_config_command(controller: CLI, config_path: Path):
     """Run CIP configuration tests."""
-    if not controller.cip_config(str(config_path)):
+    if not controller.cip_config(str(config_path), force=True):
         raise click.ClickException("CIP configuration failed.")
 
 
@@ -347,7 +382,9 @@ def test_net_command(controller: CLI, target_ip: str, multicast_ip: str):
     selected_target_ip = target_ip or controller.target_ip
     selected_multicast_ip = multicast_ip or controller.multicast_ip
 
-    if not controller.config_network(selected_target_ip, selected_multicast_ip):
+    if not controller.ensure_network_configuration(
+        selected_target_ip, selected_multicast_ip, force=True
+    ):
         raise click.ClickException("Network configuration failed.")
 
 
@@ -373,7 +410,9 @@ def set_net_command(controller: CLI, target_ip: str, multicast_ip: str):
         "Multicast group address", default=controller.multicast_ip, show_default=True
     )
 
-    if not controller.config_network(updated_target_ip, updated_multicast_ip):
+    if not controller.ensure_network_configuration(
+        updated_target_ip, updated_multicast_ip, force=True
+    ):
         raise click.ClickException("Network configuration failed.")
 
     click.echo("Network settings updated.")

@@ -4,6 +4,7 @@ import logging
 import os
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import click
@@ -25,6 +26,7 @@ from xcipmaster.fields import (
     WaveformManager,
 )
 from xcipmaster.network import NetworkCommandRunner, NetworkTestService
+from xcipmaster.paths import default_config_directory
 
 from .ui import UIUtilities
 
@@ -108,6 +110,7 @@ class CLI(UIUtilities):
         self.test_mode = test_mode
         self.target_ip = "10.0.1.1"
         self.multicast_ip = "239.192.1.3"
+        self.default_config_path = str(default_config_directory())
 
     @property
     def ot_packet(self):
@@ -182,20 +185,45 @@ class CLI(UIUtilities):
         return [str(path) for path in xml_files]
 
     def _resolve_cip_config_path(self, config_path: str):
-        resolved_path = self.config_service.resolve_cip_config_path(config_path)
-        if resolved_path is None:
-            click.echo("CIP configuration path is invalid or ambiguous.")
-            return None
-        return str(resolved_path)
+        if hasattr(self.config_service, "resolve_cip_config_path"):
+            resolved_path = self.config_service.resolve_cip_config_path(config_path)
+            if resolved_path is None:
+                click.echo("CIP configuration path is invalid or ambiguous.")
+                return None
+            return str(resolved_path)
+        return str(config_path)
 
-    def cip_config(self, config_path: str):
+    def cip_config(self, config_path: str, *, force: bool = False):
         self.logger.info("Executing cip_config function")
 
         click.echo("╔══════════════════════════════════════════╗")
         click.echo("║          CIP Configuration               ║")
         click.echo("╚══════════════════════════════════════════╝")
 
-        result = self.config_service.load_configuration(str(config_path))
+        resolved_path_str = self._resolve_cip_config_path(str(config_path))
+        if resolved_path_str is None:
+            click.echo("Unable to load CIP configuration. Check the provided path.")
+            click.echo("")
+            self.cip_test_flag = False
+            return False
+
+        resolved_path = Path(resolved_path_str)
+
+        current_path = getattr(self.config_service, "cip_xml_path", None)
+        overall_valid = getattr(self.config_service, "overall_cip_valid", False)
+        if (
+            not force
+            and current_path is not None
+            and current_path == resolved_path
+            and overall_valid
+        ):
+            click.echo(f"Using cached CIP configuration: {resolved_path}")
+            click.echo("")
+            self.cip_test_flag = True
+            self.default_config_path = str(resolved_path)
+            return True
+
+        result = self.config_service.load_configuration(str(resolved_path))
         if not result.resolved_path:
             click.echo("Unable to load CIP configuration. Check the provided path.")
             click.echo("")
@@ -218,13 +246,40 @@ class CLI(UIUtilities):
             click.echo("All tests passed successfully.")
             click.echo("")
             self.cip_test_flag = True
+            self.default_config_path = str(result.resolved_path)
             return True
 
         click.echo("Some tests failed. See output above for details.")
         click.echo("")
         self.cip_test_flag = False
         return False
-        
+
+    def ensure_configuration(self, config_path: Optional[str] = None, *, force: bool = False) -> bool:
+        """Ensure a CIP configuration is loaded, optionally from *config_path*."""
+
+        path_to_use = config_path or self.default_config_path
+        if not path_to_use:
+            click.echo("No CIP configuration path available.")
+            return False
+
+        resolved_path_str = self._resolve_cip_config_path(path_to_use)
+        if resolved_path_str is None:
+            return False
+
+        resolved_path = Path(resolved_path_str)
+        current_path = getattr(self.config_service, "cip_xml_path", None)
+        overall_valid = getattr(self.config_service, "overall_cip_valid", False)
+
+        if (
+            not force
+            and current_path is not None
+            and current_path == resolved_path
+            and overall_valid
+        ):
+            return True
+
+        return self.cip_config(str(resolved_path), force=force)
+
     def config_network(self, target_ip: str, multicast_ip: str):
         self.logger.info("Executing config_network function")
         click.echo("╔══════════════════════════════════════════╗")
@@ -258,6 +313,40 @@ class CLI(UIUtilities):
         click.echo("===== Failed Network Configuration Test =====")
         click.echo("")
         return False
+
+    def ensure_network_configuration(
+        self,
+        target_ip: Optional[str] = None,
+        multicast_ip: Optional[str] = None,
+        *,
+        force: bool = False,
+    ) -> bool:
+        """Ensure network tests have succeeded for the requested addresses."""
+
+        selected_target = target_ip or self.target_ip
+        selected_multicast = multicast_ip or self.multicast_ip
+
+        current_ip = getattr(self.network_service, "ip_address", None)
+        current_multicast = getattr(self.network_service, "user_multicast_address", None)
+        net_flag = getattr(self.network_service, "net_test_flag", False)
+        multicast_flag = getattr(self.network_service, "multicast_test_status", False)
+
+        if (
+            not force
+            and current_ip == selected_target
+            and current_multicast == selected_multicast
+            and net_flag
+            and multicast_flag
+        ):
+            self.target_ip = selected_target
+            self.multicast_ip = selected_multicast
+            return True
+
+        success = self.config_network(selected_target, selected_multicast)
+        if success:
+            self.target_ip = selected_target
+            self.multicast_ip = selected_multicast
+        return success
             
             
     ############ Help Menu ############ 
