@@ -23,6 +23,7 @@ from struct import pack, unpack
 import binascii
 import operator
 import struct
+from pathlib import Path
 # from thirdparty.scapy_cip_enip.plc import PLCClient as client
 from thirdparty.scapy_cip_enip.tgv2020 import Client
 
@@ -53,11 +54,8 @@ class CLI:
         self.OT_packet = scapy_all.packet
         self.root = None
         self.config_file_names = []
-        self.cip_config_attempts = 0
         self.cip_config_selected = None
         self.overall_cip_valid = False
-        self.cip_file_count = 0
-        self.last_cip_file_name = None
         self.stop_event = None
         self.stop_events = {}
         self.stop_comm_events = threading.Event()
@@ -400,116 +398,132 @@ class CLI:
     ################################################################
     
     
-    def list_files_in_config_folder(self):
-        config_folder = "./conf/"
-        if not os.path.exists(config_folder) or not os.path.isdir(config_folder):
+    def list_files_in_config_folder(self, config_folder: str):
+        folder_path = Path(config_folder).expanduser()
+        self.config_file_names = []
+
+        if not folder_path.exists() or not folder_path.is_dir():
             click.echo("Config folder does not exist or is not a directory!")
-            return
-        
-        self.config_file_names = os.listdir(config_folder)
-        if not self.config_file_names:
+            return []
+
+        xml_files = sorted(
+            [path for path in folder_path.iterdir() if path.suffix.lower() == ".xml"]
+        )
+        self.config_file_names = [path.name for path in xml_files]
+
+        if not xml_files:
             click.echo("No files found in the config folder")
-            return
-        
+            return []
+
         click.echo("Detected Files in Config Folder:")
         click.echo("")
-        
-        for idx, file in enumerate(self.config_file_names, start=1):
-            click.echo(f" {idx}. {file}")
-            self.last_cip_file_name = file
-            self.cip_file_count += 1
-        
+
+        for idx, path in enumerate(xml_files, start=1):
+            click.echo(f" {idx}. {path.name}")
+
         click.echo("")
-    
-    def cip_config(self):
+        return [str(path) for path in xml_files]
+
+    def _resolve_cip_config_path(self, config_path: str):
+        path = Path(config_path).expanduser()
+        if path.is_dir():
+            xml_files = self.list_files_in_config_folder(str(path))
+            if not xml_files:
+                return None
+            if len(xml_files) > 1:
+                click.echo(
+                    "Multiple CIP configuration files found. Specify one with --config."
+                )
+                return None
+            return xml_files[0]
+        if path.is_file():
+            if path.suffix.lower() != ".xml":
+                click.echo("CIP configuration file must be an XML file.")
+                return None
+            return str(path)
+
+        click.echo(f"CIP configuration path does not exist: {path}")
+        return None
+
+    def cip_config(self, config_path: str):
         self.logger.info("Executing cip_config function")
-        
+
         click.echo("╔══════════════════════════════════════════╗")
         click.echo("║          CIP Configuration               ║")
         click.echo("╚══════════════════════════════════════════╝")
-        self.list_files_in_config_folder()
+
+        resolved_path = self._resolve_cip_config_path(config_path)
+        if not resolved_path:
+            self.overall_cip_valid = False
+            return False
+
+        self.cip_xml_path = resolved_path
+        self.cip_config_selected = Path(resolved_path).name
+
+        click.echo(f"Using CIP configuration: {self.cip_xml_path}")
+        click.echo("")
         time.sleep(0.1)
-        
-        if self.cip_file_count > 1:
-            if self.cip_config_attempts == 0:
-                self.cip_config_selected = click.prompt("CIP Configuration Filename")
-                click.echo("")
-            elif self.cip_config_attempts > 0:
-                if click.confirm('Do you want to change CIP Configuration?', default=True):
-                    self.cip_config_selected = click.prompt("CIP Configuration Filename")
-        else:
-            self.cip_config_selected = self.last_cip_file_name
-            
-        # Increment the CIP Configuration Attempt Number
-        self.cip_config_attempts += 1
-        
-        click.echo("\n===== Testing CIP Configuration =====")
-        
+
+        click.echo("===== Testing CIP Configuration =====")
+
         test_cases = [
-            ("CIP XML Validity", self.check_cip_xml_validity) #,
-            # ("Network Connectivity", self.check_network_connectivity),
-            # ("Database Connection", self.check_database_connection),
-            # Add more test cases as needed
+            ("CIP XML Validity", self.check_cip_xml_validity),
         ]
-        
-        if self.overall_cip_valid:
-            self.cip_test_flag = True
-        else:
-            self.cip_test_flag = False
-        
+
+        self.cip_test_flag = self.overall_cip_valid
+
         results = []
         for test_case, test_function in test_cases:
             result = "OK" if test_function() else "FAILED"
             results.append([test_case, result])
-    
+
         if all(result == "OK" for _, result in results):
             click.echo("All tests passed successfully.")
             click.echo("")
             self.cip_test_flag = True
             return True
-        else:
-            click.echo("Some tests failed. Restarting CIP Tool.")
-            click.echo("")
-            return False
+
+        click.echo("Some tests failed. See output above for details.")
+        click.echo("")
+        self.cip_test_flag = False
+        return False
 
     def check_cip_config(self):
         self.logger.info("Executing check_cip_config function")
-        """
-        Placeholder function to check CIP XML validity.
-        Replace the implementation with actual logic.
-        """
-        config_folder = "./conf/"
+
         results = []
-        
-        if not os.path.exists(config_folder) or not os.path.isdir(config_folder):
+        xml_filepath = self.cip_xml_path
+
+        if not xml_filepath:
+            click.echo("No CIP configuration file has been provided.")
+            self.overall_cip_valid = False
+            return False
+
+        xml_path = Path(xml_filepath)
+        config_folder = xml_path.parent
+
+        if not config_folder.exists() or not config_folder.is_dir():
             click.echo("Config folder does not exist or is not a directory!")
-            return
-        
-        xml_files = [file for file in os.listdir(config_folder) if file.endswith(".xml")]
+            self.overall_cip_valid = False
+            return False
+
+        xml_files = [file for file in config_folder.iterdir() if file.suffix.lower() == ".xml"]
         if not xml_files:
-            results = []
             results.append(["Detect XML in Config Folder", "FAILED"])
             click.echo(tabulate(results, headers=["Test Case", "Status"], tablefmt="fancy_grid"))
-            return
-        else:
-            try:
-                xml_filepath = os.path.join("./conf", self.cip_config_selected)
-                results.append(["Detect XML in Config Folder", "OK"])
-            except FileNotFoundError:
-                click.echo("Error: The ./conf folder is empty.")
-        
-        
-    
-        # Check if the file exists
-        file_exists_status = "OK" if os.path.exists(xml_filepath) else "FAILED"
+            self.overall_cip_valid = False
+            return False
+
+        results.append(["Detect XML in Config Folder", "OK"])
+
+        file_exists_status = "OK" if xml_path.exists() else "FAILED"
         results.append(["CIP Conf File Exists", file_exists_status])
-    
-        # Check if the file is an XML file
-        is_xml_status = "OK" if self.cip_config_selected.lower().endswith(".xml") else "FAILED"
+
+        is_xml_status = "OK" if xml_path.suffix.lower() == ".xml" else "FAILED"
         results.append(["File is XML", is_xml_status])
-    
-        # Check if the file is valid and parseable
+
         xml_parse_status = ""
+        root = None
         if file_exists_status == "OK" and is_xml_status == "OK":
             try:
                 tree = ET.parse(xml_filepath)
@@ -521,26 +535,19 @@ class CLI:
         else:
             xml_parse_status = "SKIPPED"
         results.append(["Parse XML", xml_parse_status])
-    
-        # Check if there is only one assembly element with subtype "OT_EO"
-        if xml_parse_status == "OK":
+
+        if xml_parse_status == "OK" and root is not None:
             ot_eo_status = "OK" if self.check_ot_eo(root) else "FAILED"
             results.append(["One Assembly with Subtype 'OT_EO'", ot_eo_status])
-        
-            # Check if there is only one assembly element with subtype "TO"
+
             to_status = "OK" if self.check_to(root) else "FAILED"
             results.append(["One Assembly with Subtype 'TO'", to_status])
-    
-        
-        # If file does not exist or is not XML, overall status should be failed
-        overall_status = all(status == "OK" for _, status in results)
-        if overall_status:
-            self.overall_cip_valid = True
-        else:
-            self.overall_cip_valid = False
-            
+
+        overall_status = all(status == "OK" for _, status in results if status not in {"SKIPPED"})
+        self.overall_cip_valid = overall_status
+
         results.append(["Overall Status", "OK" if overall_status else "FAILED"])
-    
+
         click.echo(tabulate(results, headers=["Test Case", "Status"], tablefmt="fancy_grid"))
         return overall_status
 
@@ -580,28 +587,38 @@ class CLI:
     def check_cip_xml_validity(self):
         return self.check_cip_config()
         
-    def config_network(self):
+    def config_network(self, target_ip: str, multicast_ip: str):
         self.logger.info("Executing config_network function")
         click.echo("╔══════════════════════════════════════════╗")
         click.echo("║        Network Configuration             ║")
         click.echo("╚══════════════════════════════════════════╝")
         click.echo("")
-        
+
         self.net_test_flag = False
-        self.user_multicast_address = None
-        
+        self.multicast_test_status = False
+        self.multicast_route_exist = False
+
         time.sleep(0.1)
-        
-        self.ip_address = click.prompt("Enter Target IP Address", default= '10.0.1.1')
-        self.user_multicast_address = click.prompt("Enter the multicast group joining IP address", default='239.192.1.3', type=str)
-        
-        print(f"ip_address: {self.ip_address}")
-        print(f"user_multicast_address : {self.user_multicast_address}")
-                
+
+        try:
+            self.ip_address = str(ipaddress.IPv4Address(target_ip))
+        except ipaddress.AddressValueError as exc:
+            click.echo(f"Invalid target IP address: {exc}")
+            return False
+
+        try:
+            self.user_multicast_address = str(ipaddress.IPv4Address(multicast_ip))
+        except ipaddress.AddressValueError as exc:
+            click.echo(f"Invalid multicast group joining IP address: {exc}")
+            return False
+
+        click.echo(f"Target IP address: {self.ip_address}")
+        click.echo(f"Multicast group address: {self.user_multicast_address}")
+
         click.echo("\n===== Testing Communication with Target =====")
         # click.echo(f" Attempting to Communicate with {self.ip_address}")
         time.sleep(1)
-        
+
         results = [["Communication Test Result", "Status"]]
         if self.communicate_with_target():
             results.append(["Communication with Target", "OK"])
@@ -629,12 +646,9 @@ class CLI:
             time.sleep(0.1)
             return True
         else:
-            click.echo("===== Falsed Network Configuration Test =====")
+            click.echo("===== Failed Network Configuration Test =====")
             click.echo("")
-            click.echo("=============================================")
-            click.echo("=====        Restarting CIP Tool        =====")
-            click.echo("=============================================")
-            return False
+        return False
         
     def communicate_with_target(self):
         self.logger.info("Executing communication_with_target function")
@@ -663,7 +677,7 @@ class CLI:
         click.echo("\nAvailable commands:")
         
         commands = [
-            ("start", "Start Communication"),
+            ("start --config <path> --target-ip <ip> --multicast-ip <ip>", "Validate configuration, test networking, and start communication"),
             ("stop", "Stop Communication"),
             ("auto", "Switch to automatic communication"),
             ("man", "Switch to manual communication (usage: start,stop Commands)"),
@@ -677,8 +691,8 @@ class CLI:
             ("tria <name> <max_val> <min_val> <period(ms)>", "Wave a field value with a triangular waveform"),
             ("box <name> <max_val> <min_val> <period(ms)> <duty_cycle>", "Wave a field value with a square/rectangular waveform"),
             ("live <refresh_rate(ms)>", "Display real-time field data of the specified packet class"),
-            ("cip_config", "Restart CIP Config"),
-            ("test_net", "Test Network Config"),
+            ("cip-config --config <path>", "Run CIP configuration tests"),
+            ("test-net --target-ip <ip> --multicast-ip <ip>", "Run network configuration tests"),
             ("log", "Print the recent 100 log events"),
             ("exit", "Exit the application"),
             ("help", "Display this help menu")
@@ -1441,12 +1455,13 @@ def _initialize_controller(ctx: click.Context) -> CLI:
             click.echo('Exiting...')
             ctx.exit()
 
-    while not controller.cip_config():
-        pass
+    default_config_path = str(Path("./conf"))
+    if not controller.cip_config(default_config_path):
+        raise click.ClickException("CIP configuration failed during initialization.")
 
     if ENABLE_NETWORK:
-        while not controller.config_network():
-            pass
+        if not controller.config_network("10.0.1.1", "239.192.1.3"):
+            raise click.ClickException("Network configuration failed during initialization.")
 
     return controller
 
@@ -1510,12 +1525,39 @@ def cli(ctx):
 
 
 @cli.command()
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(path_type=Path, dir_okay=True, file_okay=True),
+    default=Path("./conf"),
+    show_default=True,
+    help="Path to a CIP configuration file or directory containing one.",
+)
+@click.option(
+    "--target-ip",
+    default="10.0.1.1",
+    show_default=True,
+    help="Target device IP address.",
+)
+@click.option(
+    "--multicast-ip",
+    default="239.192.1.3",
+    show_default=True,
+    help="Multicast group IP address for network tests.",
+)
 @pass_controller
-def start(controller: CLI):
-    """Start communication."""
+def start(controller: CLI, config_path: Path, target_ip: str, multicast_ip: str):
+    """Validate configuration, test networking, and start communication."""
+
     if controller.enable_auto_reconnect:
         click.echo("Disabled auto-Connect using the CMD: <man> and try again !!!")
         return
+
+    if not controller.cip_config(str(config_path)):
+        raise click.ClickException("CIP configuration failed.")
+
+    if not controller.config_network(target_ip, multicast_ip):
+        raise click.ClickException("Network configuration failed.")
 
     click.echo("Attempting to Start communication...")
     controller.start_comm()
@@ -1675,19 +1717,39 @@ def stop_wave_command(controller: CLI, field_name: str):
 
 
 @cli.command("cip-config")
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(path_type=Path, dir_okay=True, file_okay=True),
+    default=Path("./conf"),
+    show_default=True,
+    help="Path to a CIP configuration file or directory containing one.",
+)
 @pass_controller
-def cip_config_command(controller: CLI):
+def cip_config_command(controller: CLI, config_path: Path):
     """Run CIP configuration tests."""
-    while not controller.cip_config():
-        pass
+    if not controller.cip_config(str(config_path)):
+        raise click.ClickException("CIP configuration failed.")
 
 
 @cli.command("test-net")
+@click.option(
+    "--target-ip",
+    default="10.0.1.1",
+    show_default=True,
+    help="Target device IP address.",
+)
+@click.option(
+    "--multicast-ip",
+    default="239.192.1.3",
+    show_default=True,
+    help="Multicast group IP address for network tests.",
+)
 @pass_controller
-def test_net_command(controller: CLI):
+def test_net_command(controller: CLI, target_ip: str, multicast_ip: str):
     """Run network configuration tests."""
-    while not controller.config_network():
-        pass
+    if not controller.config_network(target_ip, multicast_ip):
+        raise click.ClickException("Network configuration failed.")
 
 
 @cli.command("log")
