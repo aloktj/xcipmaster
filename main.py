@@ -9,6 +9,8 @@ import math
 import threading
 import pyfiglet
 import string
+import shlex
+import cmd as cmd_module
 from termcolor import colored
 from tabulate import tabulate
 import calendar
@@ -17,7 +19,7 @@ import subprocess
 import platform
 import ipaddress
 from datetime import datetime
-from struct import pack, unpack 
+from struct import pack, unpack
 import binascii
 import operator
 import struct
@@ -1427,112 +1429,298 @@ class CLI:
             else:
                 click.echo("Communication thread has been successfully stopped")
                 self.start_comm_thread_instance = None
-    
-    def handle_input(self):
-        self.logger.info("Executing handle_input function")
-        self.help_menu()
-        
-        try:
-            while True:
-                    print("")
-                    command = click.prompt("Enter Command").strip().split()
-                    if command[0] == "start" and len(command) == 1:
-                        if self.enable_auto_reconnect:
-                            click.echo("Disabled auto-Connect using the CMD: <man> and try again !!!")
-                        else:
-                            click.echo("Attempting to Start communication...")
-                            self.start_comm()
-                    elif command[0] == "stop" and len(command) == 1:
-                        if self.enable_auto_reconnect:
-                            click.echo("Disabled auto-Connect using the CMD: <man> and try again !!!")
-                        else:
-                            click.echo("Attempting to Stop communication...")
-                            self.stop_comm()
-                    elif command[0] == "auto" and len(command) == 1:
-                        if self.enable_auto_reconnect:
-                            click.echo("Already in auto-reconnect mode.")
-                        else:
-                            click.echo("Switching to Auto-Reconnect Mode!")
-                            self.enable_auto_com()
-                            self.start_comm()
-                    elif command[0] == "man" and len(command) == 1:
-                        if self.enable_auto_reconnect:
-                            click.echo("Switching to Manual Connect Mode!")
-                            self.disable_auto_com()
-                            time.sleep(2)
-                        else:
-                            click.echo("Already in manual mode")
-                    elif command[0] == "set" and len(command) == 3:
-                        self.set_field(command[1], command[2])
-                    elif command[0] == "clear" and len(command) == 2:
-                        self.clear_field(command[1])
-                    elif command[0] == "get" and len(command) == 2:
-                        self.get_field(command[1])
-                    elif command[0] == "frame" and len(command) == 1:
-                        self.print_frame()
-                    elif command[0] == "fields" and len(command) == 1:
-                        self.list_fields()
-                    elif command[0] == "wave" and len(command) == 5:
-                        self.wave_field(command[1], float(command[2]), float(command[3]), int(command[4]))
-                    elif command[0] == "tria" and len(command) == 5:
-                        self.tria_field(command[1], float(command[2]), float(command[3]), int(command[4]))
-                    elif command[0] == "box" and len(command) == 6:
-                        self.box_field(command[1], float(command[2]), float(command[3]), int(command[4]), float(command[5]))
-                    elif command[0] == "live" and len(command) == 2:
-                        self.live_field_data(command[1])
-                    elif command[0] == "stop_wave" and len(command) == 2:
-                        self.stop_wave(command[1])
-                    elif command[0] == "cip_config" and len(command) == 1:
-                        while False == self.cip_config() :
-                            self.cip_config()
-                    elif command[0] == "test_net" and len(command) == 1:
-                        while False == self.config_network() :
-                            self.config_network()
-                    elif command[0] == "log" and len(command) == 1:
-                        self.print_last_logs()
-                    elif command[0] == "help":
-                        self.help_menu()
-                    elif command[0] == "exit":
-                        click.echo("Exiting !")
-                        self.stop_all_thread()
-                        sys.exit()
-                    else:
-                        click.echo("Invalid cmd")
-            
-        except KeyboardInterrupt:
-            click.echo("Exiting !!")
-            self.stop_all_thread()
-            sys.exit()
-                
-            
-def main():
-    
-    global ENABLE_NETWORK
-    cmd = CLI()
-    cmd.display_banner()
-    
-    cmd.progress_bar("Initializing", 1)
 
-    if cmd.cip_test_flag:
-        if click.confirm('Do you want to continue?', default=True):
-            # If user answers yes
-            cmd.cip_config()
-        else:
-            # If user answers no
+
+def _initialize_controller(ctx: click.Context) -> CLI:
+    controller = CLI()
+    controller.display_banner()
+    controller.progress_bar("Initializing", 1)
+
+    if controller.cip_test_flag and not ctx.resilient_parsing:
+        if not click.confirm('Do you want to continue?', default=True):
             click.echo('Exiting...')
-            sys.exit()
-        
-    # Test CIP Configuration
-    if not cmd.cip_test_flag:
-        main() # Restart configuration if failed
+            ctx.exit()
 
-    # Test Target Communication
+    while not controller.cip_config():
+        pass
+
     if ENABLE_NETWORK:
-        if not cmd.config_network():
-            main()  # Restart configuration if failed
+        while not controller.config_network():
+            pass
 
-    # Handle the Input from User in a loop
-    cmd.handle_input()
+    return controller
+
+
+pass_controller = click.make_pass_decorator(CLI)
+
+
+class CIPShell(cmd_module.Cmd):
+    prompt = "cip> "
+    intro = "Type 'help' to list commands. Type 'exit' or 'quit' to leave."
+
+    def __init__(self, ctx: click.Context):
+        super().__init__()
+        self.ctx = ctx
+
+    def do_exit(self, arg):  # pragma: no cover - interactive helper
+        """Exit the interactive shell."""
+        return True
+
+    do_quit = do_exit  # pragma: no cover
+
+    def do_help(self, arg):  # pragma: no cover - interactive helper
+        args = shlex.split(arg)
+        if not args:
+            self.ctx.invoke(help_command)
+            return
+
+        command = self.ctx.command.get_command(self.ctx, args[0])
+        if command is None:
+            click.echo(f"Unknown command: {args[0]}")
+            return
+
+        with command.make_context(command.name, args[1:], parent=self.ctx) as cmd_ctx:
+            click.echo(command.get_help(cmd_ctx))
+
+    def default(self, line):  # pragma: no cover - interactive helper
+        args = shlex.split(line)
+        if not args:
+            return
+
+        command = self.ctx.command.get_command(self.ctx, args[0])
+        if command is None:
+            click.echo(f"Unknown command: {args[0]}")
+            return
+
+        try:
+            with command.make_context(command.name, args[1:], parent=self.ctx) as cmd_ctx:
+                command.invoke(cmd_ctx)
+        except click.ClickException as exc:
+            exc.show()
+        except click.exceptions.Exit:
+            pass
+
+
+@click.group()
+@click.pass_context
+def cli(ctx):
+    """CIP Tool command-line interface."""
+    if ctx.obj is None and not ctx.resilient_parsing:
+        ctx.obj = _initialize_controller(ctx)
+
+
+@cli.command()
+@pass_controller
+def start(controller: CLI):
+    """Start communication."""
+    if controller.enable_auto_reconnect:
+        click.echo("Disabled auto-Connect using the CMD: <man> and try again !!!")
+        return
+
+    click.echo("Attempting to Start communication...")
+    controller.start_comm()
+
+    try:
+        while (
+            controller.start_comm_thread_instance is not None
+            and controller.start_comm_thread_instance.is_alive()
+        ):
+            controller.start_comm_thread_instance.join(timeout=0.5)
+    except KeyboardInterrupt:
+        click.echo("\nStopping communication...")
+        controller.stop_comm()
+
+
+@cli.command()
+@pass_controller
+def stop(controller: CLI):
+    """Stop communication."""
+    if controller.enable_auto_reconnect:
+        click.echo("Disabled auto-Connect using the CMD: <man> and try again !!!")
+        return
+
+    click.echo("Attempting to Stop communication...")
+    controller.stop_comm()
+
+
+@cli.command()
+@pass_controller
+def auto(controller: CLI):
+    """Enable auto-reconnect and start communication."""
+    if controller.enable_auto_reconnect:
+        click.echo("Already in auto-reconnect mode.")
+        return
+
+    click.echo("Switching to Auto-Reconnect Mode!")
+    controller.enable_auto_com()
+    controller.start_comm()
+
+    try:
+        while (
+            controller.start_comm_thread_instance is not None
+            and controller.start_comm_thread_instance.is_alive()
+        ):
+            controller.start_comm_thread_instance.join(timeout=0.5)
+    except KeyboardInterrupt:
+        click.echo("\nStopping communication...")
+        controller.stop_comm()
+
+
+@cli.command()
+@pass_controller
+def man(controller: CLI):
+    """Switch to manual communication mode."""
+    if controller.enable_auto_reconnect:
+        click.echo("Switching to Manual Connect Mode!")
+        controller.disable_auto_com()
+        time.sleep(2)
+    else:
+        click.echo("Already in manual mode")
+
+
+@cli.command("set")
+@click.argument("field_name")
+@click.argument("value")
+@pass_controller
+def set_field_command(controller: CLI, field_name: str, value: str):
+    """Set a field value."""
+    controller.set_field(field_name, value)
+
+
+@cli.command("clear")
+@click.argument("field_name")
+@pass_controller
+def clear_field_command(controller: CLI, field_name: str):
+    """Clear a field value."""
+    controller.clear_field(field_name)
+
+
+@cli.command("get")
+@click.argument("field_name")
+@pass_controller
+def get_field_command(controller: CLI, field_name: str):
+    """Get the current value of a field."""
+    controller.get_field(field_name)
+
+
+@cli.command("frame")
+@pass_controller
+def frame_command(controller: CLI):
+    """Print the packet header and payload."""
+    controller.print_frame()
+
+
+@cli.command("fields")
+@pass_controller
+def fields_command(controller: CLI):
+    """Display available fields."""
+    controller.list_fields()
+
+
+@cli.command("wave")
+@click.argument("field_name")
+@click.argument("max_value", type=float)
+@click.argument("min_value", type=float)
+@click.argument("period", type=int)
+@pass_controller
+def wave_command(controller: CLI, field_name: str, max_value: float, min_value: float, period: int):
+    """Start a sine waveform for a field."""
+    controller.wave_field(field_name, max_value, min_value, period)
+
+
+@cli.command("tria")
+@click.argument("field_name")
+@click.argument("max_value", type=float)
+@click.argument("min_value", type=float)
+@click.argument("period", type=int)
+@pass_controller
+def tria_command(controller: CLI, field_name: str, max_value: float, min_value: float, period: int):
+    """Start a triangular waveform for a field."""
+    controller.tria_field(field_name, max_value, min_value, period)
+
+
+@cli.command("box")
+@click.argument("field_name")
+@click.argument("max_value", type=float)
+@click.argument("min_value", type=float)
+@click.argument("period", type=int)
+@click.argument("duty_cycle", type=float)
+@pass_controller
+def box_command(
+    controller: CLI,
+    field_name: str,
+    max_value: float,
+    min_value: float,
+    period: int,
+    duty_cycle: float,
+):
+    """Start a square waveform for a field."""
+    controller.box_field(field_name, max_value, min_value, period, duty_cycle)
+
+
+@cli.command("live")
+@click.argument("refresh_rate", type=float)
+@pass_controller
+def live_command(controller: CLI, refresh_rate: float):
+    """Display live field data."""
+    controller.live_field_data(refresh_rate)
+
+
+@cli.command("stop_wave")
+@click.argument("field_name")
+@pass_controller
+def stop_wave_command(controller: CLI, field_name: str):
+    """Stop waveform generation for a field."""
+    controller.stop_wave(field_name)
+
+
+@cli.command("cip-config")
+@pass_controller
+def cip_config_command(controller: CLI):
+    """Run CIP configuration tests."""
+    while not controller.cip_config():
+        pass
+
+
+@cli.command("test-net")
+@pass_controller
+def test_net_command(controller: CLI):
+    """Run network configuration tests."""
+    while not controller.config_network():
+        pass
+
+
+@cli.command("log")
+@pass_controller
+def log_command(controller: CLI):
+    """Print the recent log events."""
+    controller.print_last_logs()
+
+
+@cli.command("help")
+@pass_controller
+def help_command(controller: CLI):
+    """Display help information."""
+    controller.help_menu()
+
+
+@cli.command("cmd")
+@click.pass_context
+def cmd_shell(ctx):
+    """Launch the interactive shell."""
+    shell = CIPShell(ctx)
+    try:
+        shell.cmdloop()
+    except KeyboardInterrupt:
+        click.echo("\nExiting interactive shell...")
+    finally:
+        controller = ctx.obj
+        if isinstance(controller, CLI):
+            controller.stop_all_thread()
+
+
+cli.add_command(stop_wave_command, name="stop-wave")
+
 
 if __name__ == "__main__":
-    main()
+    cli()
