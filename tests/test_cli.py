@@ -96,8 +96,10 @@ comm_stub.default_client_factory = lambda **kwargs: None
 comm_stub.default_thread_factory = lambda **kwargs: None
 sys.modules.setdefault("xcipmaster.comm", comm_stub)
 
-import main
-from main import CLI, _initialize_controller, cli
+import xcipmaster.cli.commands as cli_commands
+import xcipmaster.cli.controller as cli_controller
+from xcipmaster.cli.commands import _initialize_controller, cli
+from xcipmaster.cli.controller import CLI
 from xcipmaster.config import CIPConfigResult
 from xcipmaster.network import NetworkTestResult
 
@@ -157,7 +159,7 @@ def test_initialize_controller_skips_interactive_side_effects(monkeypatch):
     def fail_confirm(*args, **kwargs):  # pragma: no cover - defensive
         pytest.fail("click.confirm should not be called in test mode")
 
-    monkeypatch.setattr(main.click, "confirm", fail_confirm)
+    monkeypatch.setattr(cli_commands.click, "confirm", fail_confirm)
 
     def factory() -> CLI:
         controller = CLI(
@@ -200,7 +202,7 @@ def test_start_command_uses_stubbed_services(monkeypatch):
         test_mode=True,
     )
 
-    monkeypatch.setattr(main.time, "sleep", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli_controller.time, "sleep", lambda *args, **kwargs: None)
 
     runner = CliRunner()
     result = runner.invoke(cli, ["start"], obj=controller)

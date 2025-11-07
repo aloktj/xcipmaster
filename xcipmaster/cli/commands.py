@@ -1,0 +1,370 @@
+"""Command definitions for the CIP CLI."""
+
+from pathlib import Path
+from typing import Callable
+
+import cmd as cmd_module
+import shlex
+import time
+
+import click
+
+from .controller import CLI
+
+
+ENABLE_NETWORK = True
+
+
+def _initialize_controller(
+    ctx: click.Context, factory: Callable[[], CLI] = CLI
+) -> CLI:
+    """Create and prepare the :class:`CLI` controller for interactive sessions.
+
+    Tests can supply a custom ``factory`` (for example ``lambda: CLI(test_mode=True)``)
+    to inject stub services and bypass the interactive startup behaviour.
+    """
+
+    controller = factory()
+
+    if not controller.test_mode:
+        controller.display_banner()
+        controller.progress_bar("Initializing", 1)
+
+        if controller.cip_test_flag and not ctx.resilient_parsing:
+            if not click.confirm('Do you want to continue?', default=True):
+                click.echo('Exiting...')
+                ctx.exit()
+
+        default_config_path = str(Path("./conf"))
+        if not controller.cip_config(default_config_path):
+            raise click.ClickException("CIP configuration failed during initialization.")
+
+        if ENABLE_NETWORK:
+            if not controller.config_network("10.0.1.1", "239.192.1.3"):
+                raise click.ClickException(
+                    "Network configuration failed during initialization."
+                )
+
+    return controller
+
+
+pass_controller = click.make_pass_decorator(CLI)
+
+
+class CIPShell(cmd_module.Cmd):
+    prompt = "cip> "
+    intro = "Type 'help' to list commands. Type 'exit' or 'quit' to leave."
+
+    def __init__(self, ctx: click.Context):
+        super().__init__()
+        self.ctx = ctx
+
+    def do_exit(self, arg):  # pragma: no cover - interactive helper
+        """Exit the interactive shell."""
+        return True
+
+    do_quit = do_exit  # pragma: no cover
+
+    def do_help(self, arg):  # pragma: no cover - interactive helper
+        args = shlex.split(arg)
+        if not args:
+            self.ctx.invoke(help_command)
+            return
+
+        command = self.ctx.command.get_command(self.ctx, args[0])
+        if command is None:
+            click.echo(f"Unknown command: {args[0]}")
+            return
+
+        with command.make_context(command.name, args[1:], parent=self.ctx) as cmd_ctx:
+            click.echo(command.get_help(cmd_ctx))
+
+    def default(self, line):  # pragma: no cover - interactive helper
+        args = shlex.split(line)
+        if not args:
+            return
+
+        command = self.ctx.command.get_command(self.ctx, args[0])
+        if command is None:
+            click.echo(f"Unknown command: {args[0]}")
+            return
+
+        try:
+            with command.make_context(command.name, args[1:], parent=self.ctx) as cmd_ctx:
+                command.invoke(cmd_ctx)
+        except click.ClickException as exc:
+            exc.show()
+        except click.exceptions.Exit:
+            pass
+
+
+@click.group()
+@click.pass_context
+def cli(ctx):
+    """CIP Tool command-line interface."""
+    if ctx.obj is None and not ctx.resilient_parsing:
+        ctx.obj = _initialize_controller(ctx, CLI)
+
+
+@cli.command()
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(path_type=Path, dir_okay=True, file_okay=True),
+    default=Path("./conf"),
+    show_default=True,
+    help="Path to a CIP configuration file or directory containing one.",
+)
+@click.option(
+    "--target-ip",
+    default="10.0.1.1",
+    show_default=True,
+    help="Target device IP address.",
+)
+@click.option(
+    "--multicast-ip",
+    default="239.192.1.3",
+    show_default=True,
+    help="Multicast group IP address for network tests.",
+)
+@pass_controller
+def start(controller: CLI, config_path: Path, target_ip: str, multicast_ip: str):
+    """Validate configuration, test networking, and start communication."""
+
+    if controller.enable_auto_reconnect:
+        click.echo("Disabled auto-Connect using the CMD: <man> and try again !!!")
+        return
+
+    if not controller.cip_config(str(config_path)):
+        raise click.ClickException("CIP configuration failed.")
+
+    if not controller.config_network(target_ip, multicast_ip):
+        raise click.ClickException("Network configuration failed.")
+
+    click.echo("Attempting to Start communication...")
+    controller.comm_manager.start()
+
+    try:
+        while (
+            controller.start_comm_thread_instance is not None
+            and controller.start_comm_thread_instance.is_alive()
+        ):
+            controller.start_comm_thread_instance.join(timeout=0.5)
+    except KeyboardInterrupt:
+        click.echo("\nStopping communication...")
+        controller.comm_manager.stop()
+
+
+@cli.command()
+@pass_controller
+def stop(controller: CLI):
+    """Stop communication."""
+    if controller.enable_auto_reconnect:
+        click.echo("Disabled auto-Connect using the CMD: <man> and try again !!!")
+        return
+
+    click.echo("Attempting to Stop communication...")
+    controller.comm_manager.stop()
+
+
+@cli.command()
+@pass_controller
+def auto(controller: CLI):
+    """Enable auto-reconnect and start communication."""
+    if controller.enable_auto_reconnect:
+        click.echo("Already in auto-reconnect mode.")
+        return
+
+    click.echo("Switching to Auto-Reconnect Mode!")
+    controller.comm_manager.enable_auto()
+    controller.comm_manager.start()
+
+    try:
+        while (
+            controller.start_comm_thread_instance is not None
+            and controller.start_comm_thread_instance.is_alive()
+        ):
+            controller.start_comm_thread_instance.join(timeout=0.5)
+    except KeyboardInterrupt:
+        click.echo("\nStopping communication...")
+        controller.comm_manager.stop()
+
+
+@cli.command()
+@pass_controller
+def man(controller: CLI):
+    """Switch to manual communication mode."""
+    if controller.enable_auto_reconnect:
+        click.echo("Switching to Manual Connect Mode!")
+        controller.comm_manager.disable_auto()
+        time.sleep(2)
+    else:
+        click.echo("Already in manual mode")
+
+
+@cli.command("set")
+@click.argument("field_name")
+@click.argument("value")
+@pass_controller
+def set_field_command(controller: CLI, field_name: str, value: str):
+    """Set a field value."""
+    controller.set_field(field_name, value)
+
+
+@cli.command("clear")
+@click.argument("field_name")
+@pass_controller
+def clear_field_command(controller: CLI, field_name: str):
+    """Clear a field value."""
+    controller.clear_field(field_name)
+
+
+@cli.command("get")
+@click.argument("field_name")
+@pass_controller
+def get_field_command(controller: CLI, field_name: str):
+    """Get the current value of a field."""
+    controller.get_field(field_name)
+
+
+@cli.command("frame")
+@pass_controller
+def frame_command(controller: CLI):
+    """Print the packet header and payload."""
+    controller.print_frame()
+
+
+@cli.command("fields")
+@pass_controller
+def fields_command(controller: CLI):
+    """Display available fields."""
+    controller.list_fields()
+
+
+@cli.command("wave")
+@click.argument("field_name")
+@click.argument("max_value", type=float)
+@click.argument("min_value", type=float)
+@click.argument("period", type=int)
+@pass_controller
+def wave_command(controller: CLI, field_name: str, max_value: float, min_value: float, period: int):
+    """Start a sine waveform for a field."""
+    controller.wave_field(field_name, max_value, min_value, period)
+
+
+@cli.command("tria")
+@click.argument("field_name")
+@click.argument("max_value", type=float)
+@click.argument("min_value", type=float)
+@click.argument("period", type=int)
+@pass_controller
+def tria_command(controller: CLI, field_name: str, max_value: float, min_value: float, period: int):
+    """Start a triangular waveform for a field."""
+    controller.tria_field(field_name, max_value, min_value, period)
+
+
+@cli.command("box")
+@click.argument("field_name")
+@click.argument("max_value", type=float)
+@click.argument("min_value", type=float)
+@click.argument("period", type=int)
+@click.argument("duty_cycle", type=float)
+@pass_controller
+def box_command(
+    controller: CLI,
+    field_name: str,
+    max_value: float,
+    min_value: float,
+    period: int,
+    duty_cycle: float,
+):
+    """Start a square waveform for a field."""
+    controller.box_field(field_name, max_value, min_value, period, duty_cycle)
+
+
+@cli.command("live")
+@click.argument("refresh_rate", type=float)
+@pass_controller
+def live_command(controller: CLI, refresh_rate: float):
+    """Display live field data."""
+    controller.live_field_data(refresh_rate)
+
+
+@cli.command("stop_wave")
+@click.argument("field_name")
+@pass_controller
+def stop_wave_command(controller: CLI, field_name: str):
+    """Stop waveform generation for a field."""
+    controller.stop_wave(field_name)
+
+
+@cli.command("cip-config")
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(path_type=Path, dir_okay=True, file_okay=True),
+    default=Path("./conf"),
+    show_default=True,
+    help="Path to a CIP configuration file or directory containing one.",
+)
+@pass_controller
+def cip_config_command(controller: CLI, config_path: Path):
+    """Run CIP configuration tests."""
+    if not controller.cip_config(str(config_path)):
+        raise click.ClickException("CIP configuration failed.")
+
+
+@cli.command("test-net")
+@click.option(
+    "--target-ip",
+    default="10.0.1.1",
+    show_default=True,
+    help="Target device IP address.",
+)
+@click.option(
+    "--multicast-ip",
+    default="239.192.1.3",
+    show_default=True,
+    help="Multicast group IP address for network tests.",
+)
+@pass_controller
+def test_net_command(controller: CLI, target_ip: str, multicast_ip: str):
+    """Run network configuration tests."""
+    if not controller.config_network(target_ip, multicast_ip):
+        raise click.ClickException("Network configuration failed.")
+
+
+@cli.command("log")
+@pass_controller
+def log_command(controller: CLI):
+    """Print the recent log events."""
+    controller.print_last_logs()
+
+
+@cli.command("help")
+@pass_controller
+def help_command(controller: CLI):
+    """Display help information."""
+    controller.help_menu()
+
+
+@cli.command("cmd")
+@click.pass_context
+def cmd_shell(ctx):
+    """Launch the interactive shell."""
+    shell = CIPShell(ctx)
+    try:
+        shell.cmdloop()
+    except KeyboardInterrupt:
+        click.echo("\nExiting interactive shell...")
+    finally:
+        controller = ctx.obj
+        if isinstance(controller, CLI):
+            controller.stop_all_thread()
+
+
+cli.add_command(stop_wave_command, name="stop-wave")
+
+
+if __name__ == "__main__":
+    cli()
