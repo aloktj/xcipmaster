@@ -552,6 +552,32 @@ class CLI(UIUtilities):
             formatted.append((name, display))
         return formatted
 
+    def print_frame(self):
+        """Render the current OT and TO packets as hexadecimal frames."""
+
+        self.logger.info("Executing print_frame function")
+
+        packets = (("OT_EO", self.ot_packet), ("TO", self.to_packet))
+
+        for label, packet in packets:
+            if packet is None:
+                click.echo(f"No {label} packet is currently loaded.")
+                click.echo("")
+                continue
+
+            click.echo(f"{label} Packet Header and Payload:")
+
+            try:
+                hexdump_output = scapy_all.hexdump(packet, dump=True)
+            except Exception as exc:  # pragma: no cover - defensive fallback
+                self.logger.exception("Failed to render %s packet", label)
+                click.echo(f"Unable to display {label} packet: {exc}")
+                click.echo("")
+                continue
+
+            click.echo(hexdump_output)
+            click.echo("")
+
     def print_packet_fields(self, title, packet, show_spares=False, subtype=None):
         # Organizing fields by type for the given packet
         fields_by_type = {}
