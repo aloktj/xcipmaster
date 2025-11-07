@@ -10,6 +10,22 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 
+class NetworkCommandRunner:
+    """Helper responsible for executing platform network commands."""
+
+    def ping(self, ip_address: str) -> int:
+        """Return the status code from invoking the platform ping command."""
+
+        return os.system(f"ping -c 1 {ip_address}")
+
+    def route(self, command: List[str]) -> subprocess.CompletedProcess[str]:
+        """Execute a route inspection command and return the completed process."""
+
+        return subprocess.run(
+            command, capture_output=True, text=True, check=True
+        )
+
+
 @dataclass
 class NetworkTestResult:
     """Result of executing network connectivity validation."""
@@ -23,8 +39,13 @@ class NetworkTestResult:
 class NetworkTestService:
     """Service responsible for validating network reachability and multicast support."""
 
-    def __init__(self, logger: Optional[logging.Logger] = None):
+    def __init__(
+        self,
+        logger: Optional[logging.Logger] = None,
+        runner: Optional[NetworkCommandRunner] = None,
+    ):
         self.logger = logger or logging.getLogger(self.__class__.__name__)
+        self._runner = runner or NetworkCommandRunner()
         self.ip_address: Optional[str] = None
         self.user_multicast_address: Optional[str] = None
         self.net_test_flag: bool = False
@@ -81,9 +102,9 @@ class NetworkTestService:
         try:
             os_name = platform.system()
             if os_name == "Windows":
-                result = subprocess.run(["route", "print"], capture_output=True, text=True, check=True)
+                result = self._runner.route(["route", "print"])
             elif os_name in ["Linux", "Darwin"]:
-                result = subprocess.run(["ip", "route"], capture_output=True, text=True, check=True)
+                result = self._runner.route(["ip", "route"])
             else:
                 self.logger.warning("Unsupported operating system: %s", os_name)
                 return None
@@ -129,8 +150,7 @@ class NetworkTestService:
             return False
 
         try:
-            ping_cmd = f"ping -c 1 {self.ip_address}"
-            ping_result = os.system(ping_cmd)
+            ping_result = self._runner.ping(self.ip_address)
             if ping_result != 0:
                 self.net_test_flag = False
                 return False
@@ -142,4 +162,4 @@ class NetworkTestService:
             return False
 
 
-__all__ = ["NetworkTestService", "NetworkTestResult"]
+__all__ = ["NetworkCommandRunner", "NetworkTestService", "NetworkTestResult"]
