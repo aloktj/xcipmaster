@@ -1,7 +1,6 @@
 """Core controller for the CIP command-line interface."""
 
 import logging
-import operator
 import os
 import string
 import struct
@@ -88,19 +87,27 @@ class CLI(UIUtilities, WaveformUtilities):
 
     @property
     def ot_packet(self):
-        return self.config_service.OT_packet
+        packet = self.config_service.get_packet_instance("OT_EO")
+        return packet if packet is not None else self.config_service.OT_packet
 
     @ot_packet.setter
     def ot_packet(self, value):
-        self.config_service.OT_packet = value
+        if hasattr(self.config_service, "set_packet_instance"):
+            self.config_service.set_packet_instance("OT_EO", value)
+        else:  # pragma: no cover - defensive fallback
+            self.config_service.OT_packet = value
 
     @property
     def to_packet(self):
-        return self.config_service.TO_packet
+        packet = self.config_service.get_packet_instance("TO")
+        return packet if packet is not None else self.config_service.TO_packet
 
     @to_packet.setter
     def to_packet(self, value):
-        self.config_service.TO_packet = value
+        if hasattr(self.config_service, "set_packet_instance"):
+            self.config_service.set_packet_instance("TO", value)
+        else:  # pragma: no cover - defensive fallback
+            self.config_service.TO_packet = value
 
     @property
     def lock(self):
@@ -129,186 +136,6 @@ class CLI(UIUtilities, WaveformUtilities):
     ###                     Configuration                           ###
     ###-------------------------------------------------------------###
  
-    # Dynamically create a Scapy packet class
-    def create_packet_dict(self, fields_dict, assembly_size):
-        max_packet_size_bits= assembly_size
-        self.logger.info("Create_Packet_Dictionary()")
-        print(f"Assembly Size: {max_packet_size_bits}")
-        fields_desc = []
-        pack_bools = {}
-        signals = {}
-        
-        cip_data_type_size = {
-            'usint': 1,
-            'uint': 2,
-            'udint': 4,
-            'real': 4,
-            'string': 1,
-            'sint': 1,
-            'int': 2,
-            'dint': 4,
-            'lreal': 8,
-            'lint': 8
-            
-            # Add more datatypes if needed (except bool) (Size in Bytes)
-        }
-        
-        print("")
-        print("Create Packet Dict Called")
-        # Sort fields by their offsets to ensure correct packing
-        fields_dict.sort(key=operator.itemgetter('offset'))
-        # print("SORTED FIELD")
-        # for field in fields_dict:
-        #     print(f"ID: {field['id']}, Offset: {field['offset']}, Type: {field['type']}")
-            
-        self.logger.info("create_packet_dict: Sorted Fields")
-
-        sorted_dict = {}
-        # for item in fields_dict:
-        #     sorted_dict[item["id"]] = {"offset": item["offset"], 
-        #                             "type": item["type"], 
-        #                             "length": item["length"]}    
-        for item in fields_dict:
-            sorted_dict[item["id"]] = {"offset": item["offset"], 
-                                    "type": item["type"], "length": item["length"]}   
-        
-        # Iterate through sorted fields to organize signals into byte-sized packages
-        for field_id, field_info in sorted_dict.items():
-            offset = field_info['offset']
-            field_type = field_info['type']
-            field_length = field_info['length']
-
-            # Calculate byte index for the current offset
-            byte_index = offset // 8
-
-            # Create a new package for the byte if it doesn't exist
-            if byte_index not in signals:
-                signals[byte_index] = []
-
-            # Append the signal to the corresponding package
-            if field_type == "bool":
-                signals[byte_index].append({'id': field_id, 'offset': offset, 'type': "bool", 'length': 1})
-
-        # Iterate through byte-sized packages to add signals and spares to the field description
-        len_counter = 0
-        temp_pad_index = 0
-        temp_pad_len = 0
-        for byte_index in range(( max_packet_size_bits // 8)):
-            
-            if len_counter != 0:
-                len_counter -= 1
-                continue
-            
-            pack = signals.get(byte_index, [])
-            if not pack:  # If no signals in this byte range
-                signals[byte_index] = []
-                # Check if there are other field types present in this byte range
-                for field_id, field_info in sorted_dict.items():
-                    if field_info['offset'] == byte_index * 8 and field_info['type'] != 'bool':
-                        field_data = (field_id, field_info['type'], field_info['length'])
-                        break
-                    else:
-                        field_data = None
-
-                if field_data:
-                    if temp_pad_len > 0:
-                        signals[temp_pad_index].append(
-                            {'id': f"spare_byte_{temp_pad_index}", 'offset': temp_pad_index * 8, 'type': "string", 'length': temp_pad_len})
-                        temp_pad_len = 0
-                        temp_pad_index = 0
-                    
-                    field_name, field_type, field_length = field_data
-                    signals[byte_index].append({'id': field_name, 'offset': byte_index * 8,  
-                                                'type': field_type, 'length': field_length})
-                    len_counter_field_size = cip_data_type_size.get(field_type, 1)
-                    
-                    len_counter = field_length*len_counter_field_size  - 1      # Support only String, TODO: make it support all datatype except bool
-                else:
-                    len_counter = 0
-                    if temp_pad_len == 0:
-                        temp_pad_index = byte_index
-                    temp_pad_len += 1
-
-            else:
-                if temp_pad_len > 0:
-                    signals[temp_pad_index].append(
-                        {'id': f"spare_byte_{temp_pad_index}", 'offset': temp_pad_index * 8, 'type': "string", 'length': temp_pad_len})
-                    temp_pad_len = 0
-                    temp_pad_index = 0
-                    
-                occupied_offsets = {signal['offset'] % 8 for signal in pack}
-                for bit_index in range(8):
-                    if bit_index not in occupied_offsets:
-                        bit_offset = byte_index * 8 + bit_index
-                        signals[byte_index].append(
-                            {'id': f"spare_bit_{byte_index}_{bit_index}", 'offset': bit_offset, 'type': "bool", 'length': 1})
-                signals[byte_index].sort(key=lambda x: x['offset'])
-        
-        if temp_pad_len > 0:
-            signals[temp_pad_index].append({'id': f"spare_byte_{temp_pad_index}", 'offset': temp_pad_index * 8, 'type': "string", 'length': temp_pad_len})
-
-        return signals
-    
-    def sorted_fields(self, packet):
-        self.logger.info("sorted_fields()")
-        fields = []
-        for byte_index, signals in packet.items():
-            for signal in signals:
-                fields.append({'id': signal['id'], 'offset': signal['offset'], 'type': signal['type'], 'length': signal['length']})
-
-            # Sort fields based on offset value
-            fields = sorted(fields, key=lambda x: x['offset'])
-        return fields
-
-    
-    def create_packet_class(self, assembly_element):
-        self.logger.info("create_packet_class()")
-        subtype = assembly_element.attrib['subtype']
-        assembly_size = int(assembly_element.attrib['size'])
-        if subtype not in ['OT_EO', 'TO']:
-            return None  # Skip creation if subtype is not 'OT_EO' or 'TO'
-
-        class_name = assembly_element.attrib['id']
-        fields_dict = []
-
-        for field in assembly_element.findall('.//'):
-            field_len = int(field.attrib.get('length', 1))
-            fields_dict.append({'id': field.attrib['id'], 'offset': int(field.attrib['offset']), 'type': field.tag, 'length': field_len})
-
-        byte_packet_field = self.create_packet_dict(fields_dict, assembly_size)
-        sorted_field = self.sorted_fields(byte_packet_field)
-        field_desc = []
-
-        for field in sorted_field:
-            field_id = field['id']
-            field_type = field['type']
-            field_length = field['length']
-            field_offset = field['offset']
-
-            if field_type == "usint":
-                field_desc.append(scapy_all.ByteField(field_id, 0))
-
-            elif field_type == "bool":
-                field_desc.append(scapy_all.BitField(field_id, 0, 1))
-
-            elif field_type == "real":
-                field_desc.append(scapy_all.IEEEFloatField(field_id, 0))
-
-            elif field_type == "string":
-                field_desc.append(scapy_all.StrFixedLenField(field_id, b'', int(field_length)))
-
-            elif field_type == "udint":
-                field_desc.append(scapy_all.LEIntField(field_id, 0))
-
-            elif field_type == "uint":
-                field_desc.append(scapy_all.ShortField(field_id, 0))
-            elif field_type == "sint":
-                field_desc.append(scapy_all.SignedByteField(field_id, 0))
-
-        dynamic_packet_class = type(class_name, (scapy_all.Packet,), {'name': class_name, 'fields_desc': field_desc})
-        return dynamic_packet_class, assembly_size
-    
-              
     ###############################################################
     # Testing only
     ################################################################
@@ -709,43 +536,52 @@ class CLI(UIUtilities, WaveformUtilities):
         print(*"=" * 50, sep="")
     
     
-    def print_packet_fields(self, title, packet, show_spares=False):
+    def print_packet_fields(self, title, packet, show_spares=False, subtype=None):
         # Organizing fields by type for the given packet
         fields_by_type = {}
-        for field in packet.fields_desc:
-            field_type = type(field).__name__
-            if field_type not in fields_by_type:
-                fields_by_type[field_type] = []
-            fields_by_type[field_type].append(field.name)
+
+        field_metadata = {}
+        if subtype:
+            for metadata in self.config_service.get_field_metadata(subtype):
+                field_metadata[metadata["id"]] = metadata
+
+        if field_metadata:
+            for metadata in field_metadata.values():
+                field_name = metadata["id"]
+                if not show_spares and field_name.startswith("spare_"):
+                    continue
+                field_type = metadata["type"]
+                fields_by_type.setdefault(field_type, []).append(field_name)
+        elif packet is not None:
+            for field in packet.fields_desc:
+                field_type = type(field).__name__
+                fields_by_type.setdefault(field_type, []).append(getattr(field, "name", ""))
 
         packet_table = []
         for field_type, field_names in fields_by_type.items():
+            field_names = [name for name in field_names if name]
             field_str = ", ".join(field_names)
             if len(field_str) > 100:
-                # Split field names into chunks without cutting them
                 field_str = ""
                 curr_len = 0
                 for name in field_names:
-                    if curr_len + len(name) + 2 > 100:  # Check if adding the next field name exceeds 100 characters
-                        field_str += "\n" + name + ", "  # Add newline and comma if needed
-                        curr_len = len(name) + 2  # Update current length
+                    if curr_len + len(name) + 2 > 100:
+                        field_str += "\n" + name + ", "
+                        curr_len = len(name) + 2
                     else:
-                        field_str += name + ", "  # Add field name and comma
-                        curr_len += len(name) + 2  # Update current length
-                field_str = field_str.rstrip(", ")  # Remove trailing comma and space
+                        field_str += name + ", "
+                        curr_len += len(name) + 2
+                field_str = field_str.rstrip(", ")
 
             packet_table.append([field_type, field_str])
 
-        # If show_spares is False, remove spare fields from packet_table
         if not show_spares:
-            packet_table = [row for row in packet_table if not row[0].startswith("Spare_")]
+            packet_table = [row for row in packet_table if not row[0].startswith("spare_")]
 
-        # Calculate the width of the table
         table_width = 100
 
-        # Print the table with a title header centered above the table
         headers = ["Field Type", "Field Names"]
-        colalign = ["left", "left"]  # Setting alignment for both columns to left
+        colalign = ["left", "left"]
         title_header = f"{title}:"
         click.echo(title_header.center(table_width))
         click.echo(tabulate(packet_table, headers=headers, colalign=colalign, tablefmt="fancy_grid"))
@@ -754,9 +590,13 @@ class CLI(UIUtilities, WaveformUtilities):
     def list_fields(self):
         self.logger.info("Executing list_fields function")
         
-        self.print_packet_fields(self.ot_packet.__class__.__name__ , self.ot_packet)
-        
-        self.print_packet_fields(self.to_packet.__class__.__name__ , self.to_packet)
+        ot_packet = self.ot_packet
+        ot_title = ot_packet.__class__.__name__ if ot_packet else "OT"
+        self.print_packet_fields(ot_title, ot_packet, subtype="OT_EO")
+
+        to_packet = self.to_packet
+        to_title = to_packet.__class__.__name__ if to_packet else "TO"
+        self.print_packet_fields(to_title, to_packet, subtype="TO")
         
     
     def get_system_timezone(self):

@@ -5,9 +5,21 @@ import logging
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple, Type
 
 from scapy import all as scapy_all
+
+
+@dataclass
+class PacketLayout:
+    """Description of a dynamically generated packet class."""
+
+    name: str
+    subtype: str
+    assembly_size: int
+    packet_class: Type[scapy_all.Packet]
+    byte_map: Dict[int, List[dict]]
+    fields: List[dict]
 
 
 @dataclass
@@ -36,6 +48,8 @@ class CIPConfigService:
         self.TO_packet_class = None
         self.OT_packet = None
         self.TO_packet = None
+        self._packet_layouts: Dict[str, PacketLayout] = {}
+        self._packet_instances: Dict[str, scapy_all.Packet] = {}
 
     def list_files_in_config_folder(self, config_folder: str) -> Sequence[Path]:
         """Return a sorted list of XML files in *config_folder*."""
@@ -165,12 +179,14 @@ class CIPConfigService:
         ]
         try:
             self.ot_eo_assemblies = ot_eo_assemblies[0]
-            self.OT_packet_class, assembly_size = self.create_packet_class(ot_eo_assemblies[0])
-            self.OT_packet = self.OT_packet_class()
+            layout = self.create_packet_class(ot_eo_assemblies[0])
+            if layout is None:
+                raise ValueError("Unable to build OT packet layout")
+            packet = self._register_packet_layout(layout)
             self.logger.debug(
                 "OT assembly size expected=%s formed=%s",
-                assembly_size // 8,
-                len(self.OT_packet),
+                layout.assembly_size // 8,
+                len(packet),
             )
         except Exception:  # pragma: no cover - defensive
             self.logger.exception("OT Packet Initialization Failure")
@@ -185,12 +201,14 @@ class CIPConfigService:
         ]
         try:
             self.to_assemblies = to_assemblies[0]
-            self.TO_packet_class, assembly_size = self.create_packet_class(to_assemblies[0])
-            self.TO_packet = self.TO_packet_class()
+            layout = self.create_packet_class(to_assemblies[0])
+            if layout is None:
+                raise ValueError("Unable to build TO packet layout")
+            packet = self._register_packet_layout(layout)
             self.logger.debug(
                 "TO assembly size expected=%s formed=%s",
-                assembly_size // 8,
-                len(self.TO_packet),
+                layout.assembly_size // 8,
+                len(packet),
             )
         except Exception:  # pragma: no cover - defensive
             self.logger.exception("TO Packet Initialization Failure")
@@ -352,7 +370,7 @@ class CIPConfigService:
         subtype = assembly_element.attrib["subtype"]
         assembly_size = int(assembly_element.attrib["size"])
         if subtype not in ["OT_EO", "TO"]:
-            return None, assembly_size
+            return None
 
         class_name = assembly_element.attrib["id"]
         fields_dict = []
@@ -393,7 +411,69 @@ class CIPConfigService:
                 field_desc.append(scapy_all.SignedByteField(field_id, 0))
 
         dynamic_packet_class = type(class_name, (scapy_all.Packet,), {"name": class_name, "fields_desc": field_desc})
-        return dynamic_packet_class, assembly_size
+        return PacketLayout(
+            name=class_name,
+            subtype=subtype,
+            assembly_size=assembly_size,
+            packet_class=dynamic_packet_class,
+            byte_map=byte_packet_field,
+            fields=sorted_field,
+        )
+
+    # Shared packet helpers -------------------------------------------------------
+    def _register_packet_layout(self, layout: PacketLayout) -> scapy_all.Packet:
+        """Store *layout* and return the instantiated packet."""
+
+        self._packet_layouts[layout.subtype] = layout
+        packet = layout.packet_class()
+        self._packet_instances[layout.subtype] = packet
+
+        if layout.subtype == "OT_EO":
+            self.OT_packet_class = layout.packet_class
+            self.OT_packet = packet
+        elif layout.subtype == "TO":
+            self.TO_packet_class = layout.packet_class
+            self.TO_packet = packet
+
+        return packet
+
+    def get_packet_layout(self, subtype: str) -> Optional[PacketLayout]:
+        """Return the stored :class:`PacketLayout` for *subtype*."""
+
+        return self._packet_layouts.get(subtype)
+
+    def get_packet_layouts(self) -> Sequence[PacketLayout]:
+        """Return all known packet layouts."""
+
+        return tuple(self._packet_layouts.values())
+
+    def get_packet_class(self, subtype: str):
+        """Return the dynamically generated packet class for *subtype*."""
+
+        layout = self.get_packet_layout(subtype)
+        return layout.packet_class if layout else None
+
+    def get_packet_instance(self, subtype: str):
+        """Return the instantiated packet for *subtype* (if available)."""
+
+        return self._packet_instances.get(subtype)
+
+    def set_packet_instance(self, subtype: str, packet: scapy_all.Packet) -> None:
+        """Store *packet* for *subtype* and keep legacy attributes in sync."""
+
+        self._packet_instances[subtype] = packet
+        if subtype == "OT_EO":
+            self.OT_packet = packet
+        elif subtype == "TO":
+            self.TO_packet = packet
+
+    def get_field_metadata(self, subtype: str) -> Sequence[dict]:
+        """Return field metadata for the packet matching *subtype*."""
+
+        layout = self.get_packet_layout(subtype)
+        if not layout:
+            return []
+        return [field.copy() for field in layout.fields]
 
 
-__all__ = ["CIPConfigService", "CIPConfigResult"]
+__all__ = ["CIPConfigService", "CIPConfigResult", "PacketLayout"]
