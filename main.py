@@ -379,7 +379,7 @@ class CLI:
                 field_desc.append(scapy_all.IEEEFloatField(field_id, 0))
 
             elif field_type == "string":
-                field_desc.append(scapy_all.StrFixedLenField(field_id, '', int(field_length)))
+                field_desc.append(scapy_all.StrFixedLenField(field_id, b'', int(field_length)))
 
             elif field_type == "udint":
                 field_desc.append(scapy_all.LEIntField(field_id, 0))
@@ -832,20 +832,19 @@ class CLI:
             
             elif isinstance(field, scapy_all.StrFixedLenField):
                 if isinstance(field_value, str):
-                    
-                    field_value1 = field_value
-                    field_value = field_value.encode() # Convert String to Bytes
-                    print(field_value)
-                if not isinstance(field_value, bytes):
-                    print(f"Field values is not byte type")
-                field_value1 = field_value
-                # field_bytes = field_value.rjust(field.length_from(self.OT_packet), b'\x00')
-                                
-                if len(field_value) <= field.length_from(self.OT_packet):
-                    setattr(self.OT_packet, field_name, field_value)
-                    print(f"Set {field_name} to {field_value}")
+                    field_bytes = field_value.encode()
+                elif isinstance(field_value, bytes):
+                    field_bytes = field_value
                 else:
-                    print(f"Field {field_name} expects a string of length up to {field.length_from(self.OT_packet)}.")
+                    print(f"Field {field_name} expects a string or bytes value.")
+                    field_bytes = None
+
+                if field_bytes is not None:
+                    if len(field_bytes) <= field.length_from(self.OT_packet):
+                        setattr(self.OT_packet, field_name, field_bytes)
+                        print(f"Set {field_name} to {field_bytes}")
+                    else:
+                        print(f"Field {field_name} expects a string of length up to {field.length_from(self.OT_packet)}.")
             else:
                 print(f"Field {field_name} is not of type IEEEFloatField, BitField, ByteField, or StrFixedLenField and "
                       f"cannot be set.")
@@ -864,7 +863,7 @@ class CLI:
                 setattr(self.OT_packet, field_name, 0)
                 print(f"Cleared {field_name}")
             elif isinstance(field, scapy_all.StrFixedLenField):
-                setattr(self.OT_packet, field_name, '')
+                setattr(self.OT_packet, field_name, b'')
                 print(f"Cleared {field_name}")
             else:
                 print(f"Cannot clear field {field_name}: unsupported field type.")
